@@ -95,9 +95,7 @@ jobs:
             BIN="./dist/sume.exe"
             ./dist/sume.exe --version
             ./dist/sume.exe --json tools schema jobs.watch > jobs-watch-schema.json
-            ./dist/sume.exe --json tools schema jobs.wait > jobs-wait-schema.json
             ./dist/sume.exe --json tools schema assets.create > assets-create-schema.json
-            ./dist/sume.exe --json tools schema assets.upload_file > assets-upload-file-schema.json
             ./dist/sume.exe --json tools schema assets.get > assets-get-schema.json
             ./dist/sume.exe --json tools schema avatars.create > avatars-create-schema.json
             ./dist/sume.exe --json tools schema avatar-videos.create > avatar-videos-create-schema.json
@@ -106,9 +104,7 @@ jobs:
             BIN="./dist/sume"
             ./dist/sume --version
             ./dist/sume --json tools schema jobs.watch > jobs-watch-schema.json
-            ./dist/sume --json tools schema jobs.wait > jobs-wait-schema.json
             ./dist/sume --json tools schema assets.create > assets-create-schema.json
-            ./dist/sume --json tools schema assets.upload_file > assets-upload-file-schema.json
             ./dist/sume --json tools schema assets.get > assets-get-schema.json
             ./dist/sume --json tools schema avatars.create > avatars-create-schema.json
             ./dist/sume --json tools schema avatar-videos.create > avatar-videos-create-schema.json
@@ -118,6 +114,8 @@ jobs:
           grep -q '"skills"' root-metadata.json
           grep -q '"balance"' root-metadata.json
           grep -q '"usage"' root-metadata.json
+          grep -q '"coming_soon"' root-metadata.json
+          grep -q '"mcp_status"' root-metadata.json
           "$BIN" balance --help > balance-help.txt
           "$BIN" usage get --help > usage-help.txt
           if "$BIN" --json catalog > catalog-parent.out 2> catalog-parent.err; then
@@ -126,9 +124,7 @@ jobs:
           fi
           grep -q "missing_subcommand" catalog-parent.err
           test -s jobs-watch-schema.json
-          test -s jobs-wait-schema.json
           test -s assets-create-schema.json
-          test -s assets-upload-file-schema.json
           test -s assets-get-schema.json
           test -s avatars-create-schema.json
           test -s avatar-videos-create-schema.json
