@@ -1,0 +1,118 @@
+@import "interlude-ui/css/dynamic-subset";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: #ffffff;
+  color: #000000;
+  font-family: "Interlude Variable", -apple-system, BlinkMacSystemFont,
+    "Apple SD Gothic Neo", "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans",
+    sans-serif;
+}
+
+main {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5rem 2rem;
+  text-align: center;
+}
+
+section {
+  width: min(100%, 72rem);
+}
+
+.logo {
+  position: fixed;
+  top: 28px;
+  left: 28px;
+  width: 26px;
+  height: auto;
+  color: #000000;
+}
+
+h1 {
+  margin: 0;
+  font-size: 10rem;
+  font-weight: 700;
+  font-variation-settings: "opsz" 32;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.install {
+  appearance: none;
+  max-width: 100%;
+  margin: 2rem 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #888888;
+  cursor: copy;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.1rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  transition: color 0.2s ease;
+}
+
+.install:hover,
+.install:focus-visible {
+  color: #000000;
+}
+
+.install:focus-visible,
+a:focus-visible {
+  outline: 2px solid #000000;
+  outline-offset: 6px;
+}
+
+nav {
+  display: flex;
+  justify-content: center;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+a {
+  color: #777777;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover,
+a:focus-visible {
+  color: #000000;
+}
+
+@media (max-width: 720px) {
+  main {
+    padding: 4rem 1.25rem;
+  }
+
+  h1 {
+    font-size: 4rem;
+  }
+
+  .install {
+    font-size: 0.9rem;
+  }
+
+  nav {
+    flex-wrap: wrap;
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+.next/
+web/.next/
+web/node_modules/
+*.tsbuildinfo
+*.log
+*.bun-build

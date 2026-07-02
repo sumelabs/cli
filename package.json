@@ -1,0 +1,64 @@
+{
+  "name": "@sumelabs/cli",
+  "version": "0.1.0",
+  "description": "Agent-first CLI and MCP tooling for sume.com",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "sume",
+    "cli",
+    "mcp",
+    "agent",
+    "public-api"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sumelabs/cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sumelabs/cli/issues"
+  },
+  "homepage": "https://github.com/sumelabs/cli#readme",
+  "bin": {
+    "sume": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.js.map",
+    "agent",
+    "install.sh",
+    "install.ps1",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "pnpm run build:node",
+    "build:node": "tsc && chmod +x dist/index.js",
+    "build:binary": "bun build --compile --minify src/index.ts --outfile dist/sume",
+    "check": "pnpm run version:check && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run secrets:check",
+    "dev": "tsx src/index.ts",
+    "prepack": "pnpm run build",
+    "secrets:check": "node scripts/check-secrets.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "version:check": "node scripts/check-version.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.2",
+    "dotenv": "^17.4.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.28.2"
+}

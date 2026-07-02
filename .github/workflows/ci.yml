@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+
+  binary-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run version:check
+      - run: pnpm run build:binary
+      - run: ./dist/sume --version
+      - run: ./dist/sume --json tools schema jobs.watch > /tmp/jobs-watch-schema.json
+      - run: ./dist/sume --json tools schema jobs.wait > /tmp/jobs-wait-schema.json
+      - run: ./dist/sume --json tools schema assets.create > /tmp/assets-create-schema.json
+      - run: ./dist/sume --json tools schema assets.upload_file > /tmp/assets-upload-file-schema.json
+      - run: ./dist/sume --json tools schema assets.get > /tmp/assets-get-schema.json
+      - run: ./dist/sume --json tools schema avatars.create > /tmp/avatars-create-schema.json
+      - run: ./dist/sume --json tools schema avatar-videos.create > /tmp/avatar-videos-create-schema.json
+      - run: cd "$(mktemp -d)" && "$GITHUB_WORKSPACE/dist/sume" --json skills list > /tmp/skills-list.json
+      - run: ./dist/sume --json > /tmp/root-metadata.json
+      - run: grep -q '"skills"' /tmp/root-metadata.json
+      - run: grep -q '"balance"' /tmp/root-metadata.json
+      - run: grep -q '"usage"' /tmp/root-metadata.json
+      - run: ./dist/sume balance --help > /tmp/balance-help.txt
+      - run: ./dist/sume usage get --help > /tmp/usage-help.txt
+      - run: |
+          if ./dist/sume --json catalog > /tmp/catalog-parent.out 2> /tmp/catalog-parent.err; then
+            echo "expected parent catalog command to fail in JSON mode" >&2
+            exit 1
+          fi
+          grep -q "missing_subcommand" /tmp/catalog-parent.err
+      - run: test -s /tmp/skills-list.json
+
+  web-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - run: pnpm run check
+        working-directory: web

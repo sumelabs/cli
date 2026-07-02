@@ -1,0 +1,212 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, for example 0.1.0"
+        required: true
+        type: string
+      dry_run:
+        description: "Build artifacts but skip GitHub Release creation"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            artifact: sume
+            platform: linux-x64
+            os: ubuntu-latest
+          - target: bun-linux-arm64
+            artifact: sume
+            platform: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: bun-darwin-x64
+            artifact: sume
+            platform: darwin-x64
+            os: macos-15-intel
+          - target: bun-darwin-arm64
+            artifact: sume
+            platform: darwin-arm64
+            os: macos-latest
+          - target: bun-windows-x64
+            artifact: sume.exe
+            platform: windows-x64
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Extract version info
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version
+        shell: bash
+        run: SUME_RELEASE_VERSION="${{ steps.version.outputs.version }}" pnpm run version:check
+
+      - name: Build binary
+        shell: bash
+        run: |
+          bun build --compile --minify \
+            --target=${{ matrix.target }} \
+            src/index.ts \
+            --outfile dist/${{ matrix.artifact }}
+
+      - name: Smoke binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "windows-x64" ]; then
+            BIN="./dist/sume.exe"
+            ./dist/sume.exe --version
+            ./dist/sume.exe --json tools schema jobs.watch > jobs-watch-schema.json
+            ./dist/sume.exe --json tools schema jobs.wait > jobs-wait-schema.json
+            ./dist/sume.exe --json tools schema assets.create > assets-create-schema.json
+            ./dist/sume.exe --json tools schema assets.upload_file > assets-upload-file-schema.json
+            ./dist/sume.exe --json tools schema assets.get > assets-get-schema.json
+            ./dist/sume.exe --json tools schema avatars.create > avatars-create-schema.json
+            ./dist/sume.exe --json tools schema avatar-videos.create > avatar-videos-create-schema.json
+            ./dist/sume.exe --json skills list > skills-list.json
+          else
+            BIN="./dist/sume"
+            ./dist/sume --version
+            ./dist/sume --json tools schema jobs.watch > jobs-watch-schema.json
+            ./dist/sume --json tools schema jobs.wait > jobs-wait-schema.json
+            ./dist/sume --json tools schema assets.create > assets-create-schema.json
+            ./dist/sume --json tools schema assets.upload_file > assets-upload-file-schema.json
+            ./dist/sume --json tools schema assets.get > assets-get-schema.json
+            ./dist/sume --json tools schema avatars.create > avatars-create-schema.json
+            ./dist/sume --json tools schema avatar-videos.create > avatar-videos-create-schema.json
+            ./dist/sume --json skills list > skills-list.json
+          fi
+          "$BIN" --json > root-metadata.json
+          grep -q '"skills"' root-metadata.json
+          grep -q '"balance"' root-metadata.json
+          grep -q '"usage"' root-metadata.json
+          "$BIN" balance --help > balance-help.txt
+          "$BIN" usage get --help > usage-help.txt
+          if "$BIN" --json catalog > catalog-parent.out 2> catalog-parent.err; then
+            echo "expected parent catalog command to fail in JSON mode" >&2
+            exit 1
+          fi
+          grep -q "missing_subcommand" catalog-parent.err
+          test -s jobs-watch-schema.json
+          test -s jobs-wait-schema.json
+          test -s assets-create-schema.json
+          test -s assets-upload-file-schema.json
+          test -s assets-get-schema.json
+          test -s avatars-create-schema.json
+          test -s avatar-videos-create-schema.json
+          test -s skills-list.json
+          test -s balance-help.txt
+          test -s usage-help.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/${{ matrix.artifact }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release info
+        id: release-info
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          fi
+
+          if [[ "$VERSION" =~ -[0-9A-Za-z.-]+$ ]]; then
+            PRERELEASE="true"
+          else
+            PRERELEASE="false"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Rename artifacts
+        shell: bash
+        run: |
+          mkdir -p release
+          cp dist/linux-x64/sume release/sume-linux-x64
+          cp dist/linux-arm64/sume release/sume-linux-arm64
+          cp dist/darwin-x64/sume release/sume-darwin-x64
+          cp dist/darwin-arm64/sume release/sume-darwin-arm64
+          cp dist/windows-x64/sume.exe release/sume-windows-x64.exe
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Generate GitHub Release manifest
+        shell: bash
+        run: |
+          node scripts/write-github-release-manifest.mjs \
+            --version "${{ steps.release-info.outputs.version }}" \
+            --tag "${{ steps.release-info.outputs.tag }}" \
+            --release-dir release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-info.outputs.tag }}
+          name: ${{ steps.release-info.outputs.tag }}
+          prerelease: ${{ steps.release-info.outputs.prerelease }}
+          generate_release_notes: true
+          files: release/*
