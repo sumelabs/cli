@@ -2449,7 +2449,7 @@ describe("CLI", () => {
           body: {
             script: "Say hello.",
             product_image: "https://example.com/product.png",
-            quality: "standard",
+            quality: "plus",
             avatar_handle: "@studio_presenter",
             scene: {
               type: "prompt",
@@ -2500,7 +2500,7 @@ describe("CLI", () => {
           url: "/v1/models/sume/avatar-video/v1.0/runs",
           body: {
             script: "Say hello.",
-            quality: "standard",
+            quality: "plus",
             avatar_handle: "@studio_presenter",
           },
         });
@@ -2622,7 +2622,7 @@ describe("CLI", () => {
             url: "/v1/models/sume/avatar-video/v1.0/runs",
 	            body: {
 	              script: "Say hello.",
-	              quality: "standard",
+	              quality: "plus",
 	              avatar_handle: "avatar_ready",
 	              scene: { type: "prompt", prompt: "Clean studio" },
 	            },

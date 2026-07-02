@@ -1013,7 +1013,7 @@ describe("MCP tool registry", () => {
           request: {
             avatar_handle: "@david_im",
             mode: "async",
-            quality: "standard",
+            quality: "plus",
             resolution: "720p",
             scene: { type: "prompt", prompt: "Clean studio" },
             script: "Say hello.",
@@ -1074,7 +1074,7 @@ describe("MCP tool registry", () => {
           request: {
             avatar_handle: "avatar_123",
             product_image: "https://media.sume.com/product.png",
-            quality: "standard",
+            quality: "plus",
             scene: {
               type: "photo",
               image_url: "https://media.sume.com/scene.png",
@@ -1090,7 +1090,7 @@ describe("MCP tool registry", () => {
         body: {
           avatar_handle: "avatar_123",
           product_image: "https://media.sume.com/product.png",
-          quality: "standard",
+          quality: "plus",
           scene: {
             type: "photo",
             image_url: "https://media.sume.com/scene.png",

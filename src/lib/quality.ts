@@ -2,7 +2,7 @@ import { CliError } from "./errors.js";
 
 export const AVATAR_VIDEO_QUALITY_VALUES = ["standard", "plus", "max"] as const;
 export type AvatarVideoQuality = (typeof AVATAR_VIDEO_QUALITY_VALUES)[number];
-export const DEFAULT_AVATAR_VIDEO_QUALITY: AvatarVideoQuality = "standard";
+export const DEFAULT_AVATAR_VIDEO_QUALITY: AvatarVideoQuality = "plus";
 
 export function readAvatarVideoQuality(
   value: string | undefined,
