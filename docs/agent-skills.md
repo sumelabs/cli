@@ -18,7 +18,7 @@ directories first so the CLI does not guess where an agent should read skills.
 Bundled skills:
 
 - `sume`: router, auth, safety, redaction, eval scenarios.
-- `sume-tools`: MCP setup, schema discovery, balance/usage, skill maintenance.
+- `sume-tools`: schema discovery, balance/usage, skill maintenance.
 - `sume-assets`: advanced compatibility asset registration/upload/download
   helpers; not the default launch media-input path.
 - `sume-avatar`: Avatar 1.0 prompt/photo/props creation and batch planning.
@@ -28,8 +28,6 @@ Bundled skills:
 Safe setup:
 
 ```bash
-sume setup agent --agent codex
-sume mcp doctor --json
 sume doctor --agent --json
 sume tools list --json
 sume tools schema avatars.create --json
@@ -45,3 +43,6 @@ Do not copy old `sume.so` Brand, Ads, Face Swap, generic generation, raw
 provider, billing-write, file, or asset-search workflows into current Sume
 agent setup unless those routes appear in the public `api.sume.com` catalog and
 tool schemas.
+
+Sume MCP is coming soon and is not part of this public CLI launch release yet.
+Use direct CLI commands today.

@@ -570,7 +570,7 @@ function delay(ms: number) {
 export const mcpTools: SumeMcpTool[] = [
   {
     name: "tools.list",
-    description: "List local Sume CLI and MCP tool contracts with safety metadata.",
+    description: "List local Sume CLI command schemas with safety metadata.",
     inputSchema: emptyInputSchema,
     annotations: readOnlyAnnotations("tools.list"),
     readOnly: true,
@@ -586,7 +586,7 @@ export const mcpTools: SumeMcpTool[] = [
   },
   {
     name: "tools.schema",
-    description: "Read one local Sume CLI or MCP tool contract by name.",
+    description: "Read one local Sume CLI command schema by name.",
     inputSchema: toolNameInputSchema,
     annotations: readOnlyAnnotations("tools.schema"),
     readOnly: true,
@@ -802,7 +802,7 @@ export const mcpTools: SumeMcpTool[] = [
   {
     name: "assets.list",
     description:
-      "List advanced compatibility workspace-scoped input assets. Hidden from the default launch MCP server.",
+      "List advanced compatibility workspace-scoped input assets. Hidden from the default public launch surface.",
     inputSchema: listAssetsInputSchema,
     annotations: readOnlyAnnotations("assets.list"),
     returnsSensitiveUrl: true,

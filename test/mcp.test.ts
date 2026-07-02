@@ -1,6 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +13,6 @@ import {
 import { listToolSchemas } from "../src/lib/tool-registry.js";
 import { formatMcpToolResponse } from "../src/mcp/server.js";
 import {
-  DEFAULT_MCP_TOOLSETS,
   listMcpTools,
   mcpNextStepsForTool,
   mcpTools,
@@ -309,8 +306,20 @@ describe("MCP tool registry", () => {
     const schemas = listToolSchemas();
     for (const tool of mcpTools) {
       const schema = schemas.find((candidate) => candidate.name === tool.name);
-      expect(schema, `missing schema for ${tool.name}`).toBeTruthy();
-      expect(schema?.execution.mcp_tool).toBe(tool.name);
+      if (!schema) {
+        expect(
+          tool.name,
+          `${tool.name} should be an MCP-only prelaunch helper`,
+        ).toMatch(
+          /^(assets\.upload_file|jobs\.wait|avatars\.wait|avatars\.create_(prompt|props|photo_url))$/,
+        );
+        continue;
+      }
+      expect(schema.execution.mcp_tool).toBeNull();
+      expect(schema.mcp).toEqual({
+        status: "coming_soon",
+        launched: false,
+      });
       expect(schema?.safety).toMatchObject({
         mutating: !tool.readOnly,
         paid_generation_call: Boolean(tool.paidProviderCall),
@@ -318,12 +327,6 @@ describe("MCP tool registry", () => {
         requires_confirmation: !tool.readOnly,
         returns_sensitive_url: Boolean(tool.returnsSensitiveUrl),
       });
-      if (!tool.readOnly) {
-        expect(schema?.confirmation?.mcp_session_gates).toContain("allowWrite");
-      }
-      if (tool.paidProviderCall) {
-        expect(schema?.confirmation?.mcp_session_gates).toContain("allowPaid");
-      }
     }
   });
 
@@ -349,21 +352,27 @@ describe("MCP tool registry", () => {
       ?.execute({}, client);
     const schema = await mcpTools
       .find((candidate) => candidate.name === "tools.schema")
-      ?.execute({ name: "assets.upload_file" }, client);
+      ?.execute({ name: "assets.create" }, client);
 
     expect(calls).toEqual([]);
     expect(list).toMatchObject({
       object: "tool_schema_list",
       count: expect.any(Number),
       tools: expect.arrayContaining([
-        expect.objectContaining({ name: "assets.upload_file" }),
+        expect.objectContaining({ name: "assets.create" }),
       ]),
     });
+    expect(JSON.stringify(list)).not.toContain("assets.upload_file");
     expect(schema).toMatchObject({
-      name: "assets.upload_file",
+      name: "assets.create",
       confirmation: {
-        mcp_session_gates: ["allowWrite"],
+        accepted_flags: ["confirm_submit"],
         required: true,
+      },
+      mcp_input_schema: null,
+      mcp: {
+        status: "coming_soon",
+        launched: false,
       },
       safety: {
         mutating: true,
@@ -372,32 +381,6 @@ describe("MCP tool registry", () => {
       },
     });
   });
-
-  it("starts the actual stdio MCP command with the documented default tools", async () => {
-    const configDir = await mkdtemp(join(tmpdir(), "sume-mcp-command-"));
-    const transport = new StdioClientTransport({
-      command: "pnpm",
-      args: ["exec", "tsx", "src/index.ts", "mcp"],
-      env: {
-        ...process.env,
-        SUME_API_BASE_URL: "https://api.sume.com/v1",
-        SUME_API_KEY: "sume_test_local",
-        SUME_CONFIG_DIR: configDir,
-      },
-    });
-    const client = new Client({ name: "sume-mcp-command-test", version: "1.0.0" });
-
-    try {
-      await client.connect(transport);
-      const result = await client.listTools();
-      expect(result.tools.map((tool) => tool.name)).toEqual(
-        listMcpTools({ toolsets: DEFAULT_MCP_TOOLSETS }).map((tool) => tool.name),
-      );
-    } finally {
-      await client.close().catch(() => undefined);
-      await rm(configDir, { recursive: true, force: true });
-    }
-  }, 20000);
 
   it("maps tools to current sume.com API paths", async () => {
     const calls: Array<{

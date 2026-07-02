@@ -12,7 +12,7 @@ Use this skill for Avatar 1.0 creation and selection.
 ```bash
 sume tools schema avatars.create --json
 sume tools schema avatars.list --json
-sume tools schema jobs.wait --json
+sume tools schema jobs.watch --json
 ```
 
 ## Single Avatar
