@@ -4,8 +4,8 @@
 
 - Signed upload URLs and headers are temporary credentials.
 - Do not send Sume API auth headers to signed storage URLs.
-- `assets.upload_file` and `sume assets upload-file` style helpers should keep
-  signed URLs internal and return only redacted asset metadata.
+- Direct upload helpers should keep signed URLs internal and return only
+  redacted asset metadata.
 
 ## Download Safety
 

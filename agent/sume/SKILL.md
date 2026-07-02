@@ -1,6 +1,6 @@
 ---
 name: sume
-description: Use the Sume.com CLI and MCP server safely for auth, API discovery, avatars, avatar videos, jobs, balance, usage, and choosing focused Sume skills. Use this as the entry skill for current api.sume.com workflows.
+description: Use the Sume.com CLI safely for auth, API discovery, avatars, avatar videos, jobs, balance, usage, and choosing focused Sume skills. Use this as the entry skill for current api.sume.com workflows.
 ---
 
 # Sume Skill Router
@@ -15,8 +15,7 @@ surfaces.
    constructing writes.
 2. Use `--agent --json` whenever automation reads jobs, avatars, or
    avatar videos.
-3. Ask for explicit approval before `--confirm-submit`, `--confirm-paid`,
-   `--allow-write`, or `--allow-paid`.
+3. Ask for explicit approval before `--confirm-submit` or `--confirm-paid`.
 4. Do not print API keys, auth approval URLs/codes in final reports, signed
    URLs, private media URLs, storage object keys, raw provider identifiers,
    workspace/user ids, or full result URLs.
@@ -43,7 +42,7 @@ the exact pattern.
 
 ## Routing
 
-- Use `sume-tools` for MCP setup, schema discovery, and skill maintenance.
+- Use `sume-tools` for schema discovery and skill maintenance.
 - Use `sume-avatar` for creating several avatars and choosing a ready avatar.
 - Use `sume-avatar-video` for making videos from selected avatars and reading
   metadata/result state.
@@ -52,6 +51,9 @@ the exact pattern.
 
 Read `references/safety.md` for auth, paid/write gates, and redaction rules.
 Read `references/eval-scenarios.md` when validating agent behavior.
+
+Sume MCP is coming soon and is not part of this public CLI launch release yet.
+Use direct CLI commands today.
 
 ## Not For
 

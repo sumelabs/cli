@@ -20,6 +20,7 @@ import { registerUsageCommand } from "./commands/usage.js";
 import { registerUpdateCommand } from "./commands/update.js";
 import { registerVersionCommand } from "./commands/version.js";
 import { CliError } from "./lib/errors.js";
+import { mcpComingSoonStatus } from "./lib/mcp-launch-status.js";
 import { emitError, outputJson } from "./lib/output.js";
 import {
   colors,
@@ -96,8 +97,6 @@ if (
       "doctor",
       "health",
       "jobs",
-      "mcp",
-      "setup",
       "skills",
       "tools",
       "balance",
@@ -105,6 +104,7 @@ if (
       "update",
       "version",
     ],
+    coming_soon: [mcpComingSoonStatus()],
   });
   process.exit(0);
 }

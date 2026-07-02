@@ -85,9 +85,13 @@ async function runCli(
   }
 }
 
-async function runCliFailure(args: string[], baseUrl: string) {
+async function runCliFailure(
+  args: string[],
+  baseUrl: string,
+  extraEnv: Record<string, string> = {},
+) {
   try {
-    await runCli(args, baseUrl);
+    await runCli(args, baseUrl, extraEnv);
   } catch (error) {
     return error as { stdout?: string; stderr?: string };
   }
@@ -185,14 +189,22 @@ describe("CLI", () => {
     expect(parsed.commands).toContain("doctor");
     expect(parsed.commands).toContain("health");
     expect(parsed.commands).toContain("jobs");
-    expect(parsed.commands).toContain("setup");
     expect(parsed.commands).toContain("skills");
     expect(parsed.commands).toContain("tools");
     expect(parsed.commands).toContain("update");
     expect(parsed.commands).toContain("usage");
+    expect(parsed.commands).not.toContain("mcp");
+    expect(parsed.commands).not.toContain("setup");
     expect(parsed.commands).not.toContain("images");
     expect(parsed.commands).not.toContain("videos");
     expect(parsed.commands).not.toContain("files");
+    expect(parsed.coming_soon).toContainEqual(
+      expect.objectContaining({
+        object: "mcp_status",
+        status: "coming_soon",
+        launched: false,
+      }),
+    );
   });
 
   it("prints help", async () => {
@@ -207,12 +219,12 @@ describe("CLI", () => {
     expect(stdout).toContain("catalog");
     expect(stdout).toContain("doctor");
     expect(stdout).toContain("health");
-    expect(stdout).toContain("mcp");
-    expect(stdout).toContain("setup");
     expect(stdout).toContain("skills");
     expect(stdout).toContain("tools");
     expect(stdout).toContain("update");
     expect(stdout).toContain("usage");
+    expect(stdout).not.toContain("mcp");
+    expect(stdout).not.toContain("setup");
     expect(stdout).not.toContain("images");
     expect(stdout).not.toMatch(/\n\s+videos\s/u);
     expect(stdout).not.toContain("files");
@@ -428,9 +440,14 @@ describe("CLI", () => {
             source: "environment",
           },
           safety: {
-            mcp_default: "read_only",
+            mcp_status: "coming_soon",
             write_commands_require_confirmation: true,
             agent_job_outputs_redact_urls: true,
+          },
+          mcp: {
+            object: "mcp_status",
+            status: "coming_soon",
+            launched: false,
           },
         });
         expect(requests).toHaveLength(0);
@@ -438,316 +455,99 @@ describe("CLI", () => {
     );
   });
 
-  it("prints MCP install dry-run JSON snippets without writing client config", async () => {
+  it("reports MCP coming soon without writing client config", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-mcp-install-"));
+    try {
+      const failure = await runCliFailure(
+        ["mcp", "install", "--agent", "codex", "--dry-run", "--json"],
+        "http://127.0.0.1/v1",
+        { HOME: homeDir },
+      );
+      expect(JSON.parse(failure.stderr ?? "")).toMatchObject({
+        error: {
+          code: "mcp_not_launched",
+          message:
+            "Sume MCP client setup is coming soon and is not launched in this CLI release yet.",
+          hint: expect.stringContaining("Use direct Sume CLI commands today"),
+        },
+      });
+      expect(fs.existsSync(path.join(homeDir, ".codex", "config.toml"))).toBe(
+        false,
+      );
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports MCP launch status without calling the API", async () => {
     await withMockApi(
       () => ({ data: { ok: true } }),
       async (baseUrl, requests) => {
         const { stdout } = await runCli(
-          ["mcp", "install", "--agent", "codex", "--dry-run", "--json"],
+          ["--json", "mcp", "doctor"],
           baseUrl,
         );
         const parsed = JSON.parse(stdout);
         expect(parsed).toMatchObject({
-          object: "mcp_install_dry_run",
-          agent: "codex",
-          client: "Codex",
-          command: ["sume", "mcp"],
-          config_location: "~/.codex/config.toml",
-          dry_run: true,
-          format: "toml",
-          safety: {
-            read_only_default: true,
-            write_tools_enabled: false,
-            paid_tools_enabled: false,
-          },
-          writes_config: false,
+          object: "mcp_status",
+          status: "coming_soon",
+          launched: false,
+          recommended_surface: "direct_cli",
         });
-        expect(parsed.snippet).toContain('[mcp_servers.sume]');
-        expect(parsed.snippet).not.toContain("allow-write");
-        expect(parsed.snippet).not.toContain("allow-paid");
         expect(requests).toHaveLength(0);
       },
     );
   });
 
-  it("prints MCP doctor readiness without calling the API", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-mcp-doctor-"));
+  it("does not write setup agent config before MCP launch", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-setup-agent-"));
     try {
-      await withMockApi(
-        () => ({ data: { ok: true } }),
-        async (baseUrl, requests) => {
-          const { stdout } = await runCli(
-            ["--json", "mcp", "doctor"],
-            baseUrl,
-            { HOME: homeDir },
-          );
-          const parsed = JSON.parse(stdout);
-          expect(parsed).toMatchObject({
-            object: "mcp_doctor_report",
-            ok: true,
-            schema_version: 1,
-            summary: {
-              total: 3,
-              configured: 0,
-              unconfigured: 3,
-              misconfigured: 0,
-            },
-          });
-          expect(parsed.clients.map((client: { agent: string }) => client.agent)).toEqual(
-            ["codex", "claude-code", "cursor"],
-          );
-          expect(requests).toHaveLength(0);
+      const failure = await runCliFailure(
+        ["--json", "setup", "agent", "--agent", "codex"],
+        "http://127.0.0.1/v1",
+        { HOME: homeDir, SUME_API_KEY: "" },
+      );
+      expect(JSON.parse(failure.stderr ?? "")).toMatchObject({
+        error: {
+          code: "agent_setup_not_launched",
+          message:
+            "Sume agent setup is coming soon and is not launched in this CLI release yet.",
+          hint: expect.stringContaining("No agent or MCP client config was written"),
         },
+      });
+      expect(fs.existsSync(path.join(homeDir, ".codex", "config.toml"))).toBe(
+        false,
       );
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
-  it("reports unsafe MCP client config without printing persisted secrets", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-mcp-bad-"));
-    try {
-      const configPath = path.join(homeDir, ".cursor", "mcp.json");
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.writeFileSync(
-        configPath,
-        `${JSON.stringify(
-          {
-            mcpServers: {
-              sume: {
-                command: "sume",
-                args: ["mcp", "--allow-write"],
-                env: { SUME_API_KEY: "persisted-secret" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      await withMockApi(
-        () => ({ data: { ok: true } }),
-        async (baseUrl, requests) => {
-          const { stdout } = await runCli(
-            ["mcp", "doctor", "--agent", "cursor", "--json"],
-            baseUrl,
-            { HOME: homeDir },
-          );
-          const parsed = JSON.parse(stdout);
-          expect(parsed).toMatchObject({
-            object: "mcp_doctor_report",
-            ok: false,
-            summary: {
-              total: 1,
-              configured: 0,
-              unconfigured: 0,
-              misconfigured: 1,
-            },
-            clients: [
-              expect.objectContaining({
-                agent: "cursor",
-                status: "misconfigured",
-                safety: expect.objectContaining({
-                  write_tools_enabled: true,
-                  paid_tools_enabled: false,
-                }),
-              }),
-            ],
-          });
-          expect(stdout).not.toContain("persisted-secret");
-          expect(stdout).not.toContain("SUME_API_KEY");
-          expect(stdout).not.toContain("--allow-write");
-          expect(requests).toHaveLength(0);
-        },
-      );
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-    }
+  it("reports MCP start as coming soon", async () => {
+    const failure = await runCliFailure(["--json", "mcp"], "http://127.0.0.1/v1");
+    expect(JSON.parse(failure.stderr ?? "")).toMatchObject({
+      error: {
+        code: "mcp_not_launched",
+        message: "Sume MCP is coming soon and is not launched in this CLI release yet.",
+        hint: expect.stringContaining("Use direct Sume CLI commands today"),
+      },
+    });
   });
 
-  it("prints MCP install dry-run snippets for supported agents", async () => {
-    for (const agent of ["claude-code", "cursor"]) {
-      const { stdout } = await runCli(
+  it("reports MCP install as coming soon before agent validation", async () => {
+    for (const agent of ["claude-code", "cursor", "windsurf"]) {
+      const failure = await runCliFailure(
         ["--json", "mcp", "install", "--agent", agent, "--dry-run"],
         "http://127.0.0.1/v1",
       );
-      const parsed = JSON.parse(stdout);
-      expect(parsed).toMatchObject({
-        object: "mcp_install_dry_run",
-        agent,
-        command: ["sume", "mcp"],
-        format: "json",
-        writes_config: false,
+      expect(JSON.parse(failure.stderr ?? "")).toMatchObject({
+        error: {
+          code: "mcp_not_launched",
+          message:
+            "Sume MCP client setup is coming soon and is not launched in this CLI release yet.",
+        },
       });
-      expect(parsed.snippet).toContain('"mcpServers"');
-      expect(parsed.snippet).not.toContain("allow-write");
-      expect(parsed.snippet).not.toContain("allow-paid");
     }
-  });
-
-  it("installs MCP client config without enabling write or paid tools", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-mcp-home-"));
-    try {
-      await withMockApi(
-        () => ({ data: { ok: true } }),
-        async (baseUrl, requests) => {
-          const { stdout } = await runCli(
-            ["--json", "mcp", "install", "--agent", "cursor"],
-            baseUrl,
-            { HOME: homeDir },
-          );
-          const parsed = JSON.parse(stdout);
-          expect(parsed).toMatchObject({
-            object: "mcp_install",
-            agent: "cursor",
-            command: ["sume", "mcp"],
-            dry_run: false,
-            status: "configured",
-            writes_config: true,
-            safety: {
-              read_only_default: true,
-              write_tools_enabled: false,
-              paid_tools_enabled: false,
-            },
-          });
-
-          const configPath = path.join(homeDir, ".cursor", "mcp.json");
-          const written = fs.readFileSync(configPath, "utf8");
-          const config = JSON.parse(written);
-          expect(config).toMatchObject({
-            mcpServers: {
-              sume: { command: "sume", args: ["mcp"] },
-            },
-          });
-          expect(written).not.toContain("allow-write");
-          expect(written).not.toContain("allow-paid");
-          expect(written).not.toContain("test-key");
-          expect(requests).toHaveLength(0);
-        },
-      );
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("sets up an agent by installing read-only MCP config without API calls", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-setup-agent-"));
-    try {
-      await withMockApi(
-        () => ({ data: { ok: true } }),
-        async (baseUrl, requests) => {
-          const first = await runCli(
-            ["--json", "setup", "agent", "--agent", "codex"],
-            baseUrl,
-            { HOME: homeDir, SUME_API_KEY: "" },
-          );
-          const parsed = JSON.parse(first.stdout);
-          expect(parsed).toMatchObject({
-            object: "agent_setup",
-            ok: true,
-            dry_run: false,
-            agent: "codex",
-            auth: {
-              configured: false,
-              source: "none",
-            },
-            mcp_install: {
-              object: "mcp_install",
-              command: ["sume", "mcp"],
-              writes_config: true,
-            },
-            mcp_readiness: {
-              status: "configured",
-              safety: {
-                read_only_default: true,
-                write_tools_enabled: false,
-                paid_tools_enabled: false,
-              },
-            },
-            safety: {
-              write_tools_enabled: false,
-              paid_tools_enabled: false,
-              secrets_written: false,
-            },
-          });
-
-          const configPath = path.join(homeDir, ".codex", "config.toml");
-          const firstWrite = fs.readFileSync(configPath, "utf8");
-          const second = await runCli(
-            ["--json", "setup", "agent", "--agent", "codex"],
-            baseUrl,
-            { HOME: homeDir, SUME_API_KEY: "" },
-          );
-          const secondWrite = fs.readFileSync(configPath, "utf8");
-
-          expect(JSON.parse(second.stdout)).toMatchObject({
-            object: "agent_setup",
-            mcp_readiness: { status: "configured" },
-          });
-          expect(secondWrite).toBe(firstWrite);
-          expect(secondWrite).toContain('[mcp_servers.sume]');
-          expect(secondWrite).toContain('command = "sume"');
-          expect(secondWrite).toContain('args = ["mcp"]');
-          expect(secondWrite).not.toContain("allow-write");
-          expect(secondWrite).not.toContain("allow-paid");
-          expect(first.stdout).not.toContain("test-key");
-          expect(second.stdout).not.toContain("test-key");
-          expect(requests).toHaveLength(0);
-        },
-      );
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("previews setup agent without writing client config", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "sume-cli-setup-dry-"));
-    try {
-      await withMockApi(
-        () => ({ data: { ok: true } }),
-        async (baseUrl, requests) => {
-          const { stdout } = await runCli(
-            ["setup", "agent", "--agent", "cursor", "--dry-run", "--json"],
-            baseUrl,
-            { HOME: homeDir },
-          );
-          const parsed = JSON.parse(stdout);
-          expect(parsed).toMatchObject({
-            object: "agent_setup",
-            dry_run: true,
-            mcp_install: {
-              object: "mcp_install_dry_run",
-              writes_config: false,
-            },
-            mcp_readiness: {
-              status: "unconfigured",
-            },
-          });
-          expect(fs.existsSync(path.join(homeDir, ".cursor", "mcp.json"))).toBe(
-            false,
-          );
-          expect(stdout).not.toContain("test-key");
-          expect(requests).toHaveLength(0);
-        },
-      );
-    } finally {
-      fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects unsupported MCP install agents", async () => {
-    const failure = await runCliFailure(
-      ["--json", "mcp", "install", "--agent", "windsurf", "--dry-run"],
-      "http://127.0.0.1/v1",
-    );
-    expect(JSON.parse(failure.stderr ?? "")).toMatchObject({
-      error: {
-        code: "invalid_argument",
-        message: "Unsupported MCP agent: windsurf",
-        hint: "Use one of: codex, claude-code, cursor",
-      },
-    });
   });
 
   it("surfaces normalized production API base URL diagnostics", async () => {
@@ -802,14 +602,14 @@ describe("CLI", () => {
           "jobs.watch",
         );
         expect(parsedList.tools.map((tool: { name: string }) => tool.name)).toContain(
-          "jobs.wait",
-        );
-        expect(parsedList.tools.map((tool: { name: string }) => tool.name)).toContain(
           "tools.schema",
         );
-        expect(parsedList.tools.map((tool: { name: string }) => tool.name)).toContain(
-          "assets.upload_file",
-        );
+        expect(
+          parsedList.tools.map((tool: { name: string }) => tool.name),
+        ).not.toContain("jobs.wait");
+        expect(
+          parsedList.tools.map((tool: { name: string }) => tool.name),
+        ).not.toContain("assets.upload_file");
         for (const name of [
           "assets.download",
           "avatar-videos.batch.plan",
@@ -869,32 +669,22 @@ describe("CLI", () => {
             },
             required: ["job_id"],
           },
-          mcp_input_schema: expect.objectContaining({
-            properties: expect.objectContaining({
-              job_id: expect.objectContaining({ type: "string" }),
-            }),
+          mcp_input_schema: null,
+          execution: expect.objectContaining({
+            mcp_tool: null,
           }),
+          mcp: {
+            status: "coming_soon",
+            launched: false,
+          },
           safety: { read_only: true },
         });
-        const waitSchema = await runCli(
+        const waitSchema = await runCliFailure(
           ["--json", "tools", "schema", "jobs.wait"],
           baseUrl,
         );
-        expect(JSON.parse(waitSchema.stdout)).toMatchObject({
-          name: "jobs.wait",
-          command: "MCP jobs.wait",
-          mcp_input_schema: {
-            required: ["job_id"],
-            properties: {
-              job_id: expect.objectContaining({ type: "string" }),
-              timeout_seconds: expect.objectContaining({ maximum: 600 }),
-            },
-          },
-          safety: {
-            read_only: true,
-            mutating: false,
-            returns_sensitive_url: true,
-          },
+        expect(JSON.parse(waitSchema.stderr ?? "")).toMatchObject({
+          error: { code: "tool_schema_not_found" },
         });
         const watchSchema = await runCli(
           ["--json", "tools", "schema", "jobs.watch"],
@@ -934,7 +724,6 @@ describe("CLI", () => {
           },
           confirmation: {
             required: true,
-            mcp_session_gates: ["allowWrite", "allowPaid"],
           },
         });
         const assetGetSchema = await runCli(
@@ -951,11 +740,10 @@ describe("CLI", () => {
               agent: expect.objectContaining({ type: "boolean" }),
             },
           },
-          mcp_input_schema: {
-            required: ["asset_id"],
-            properties: {
-              asset_id: expect.objectContaining({ type: "string" }),
-            },
+          mcp_input_schema: null,
+          mcp: {
+            status: "coming_soon",
+            launched: false,
           },
           safety: expect.objectContaining({
             read_only: true,
@@ -973,7 +761,6 @@ describe("CLI", () => {
             "sume assets create --confirm-submit --source-url <PUBLIC_HTTPS_URL> --agent --json",
           confirmation: {
             accepted_flags: ["confirm_submit"],
-            mcp_session_gates: ["allowWrite"],
             required: true,
           },
           input_schema: {
@@ -995,21 +782,7 @@ describe("CLI", () => {
               confirm_submit: expect.objectContaining({ type: "boolean" }),
             },
           },
-          mcp_input_schema: {
-            required: ["payload"],
-            properties: {
-              idempotency_key: expect.objectContaining({ type: "string" }),
-              payload: expect.objectContaining({
-                required: ["source_url"],
-                properties: expect.objectContaining({
-                  source_url: expect.objectContaining({ type: "string" }),
-                  media_type: expect.objectContaining({
-                    enum: ["image", "video", "audio", "file"],
-                  }),
-                }),
-              }),
-            },
-          },
+          mcp_input_schema: null,
           safety: expect.objectContaining({
             mutating: true,
             paid_generation_call: false,
@@ -1017,32 +790,12 @@ describe("CLI", () => {
             returns_sensitive_url: true,
           }),
         });
-        const assetUploadFileSchema = await runCli(
+        const assetUploadFileSchema = await runCliFailure(
           ["--json", "tools", "schema", "assets.upload_file"],
           baseUrl,
         );
-        expect(JSON.parse(assetUploadFileSchema.stdout)).toMatchObject({
-          name: "assets.upload_file",
-          command: "MCP assets.upload_file",
-          confirmation: {
-            accepted_flags: ["confirm_submit"],
-            mcp_session_gates: ["allowWrite"],
-            required: true,
-          },
-          mcp_input_schema: {
-            required: ["path", "content_type"],
-            properties: {
-              path: expect.objectContaining({ type: "string" }),
-              content_type: expect.objectContaining({ type: "string" }),
-            },
-          },
-          safety: {
-            mutating: true,
-            paid_generation_call: false,
-            read_only: false,
-            requires_confirmation: true,
-            returns_sensitive_url: true,
-          },
+        expect(JSON.parse(assetUploadFileSchema.stderr ?? "")).toMatchObject({
+          error: { code: "tool_schema_not_found" },
         });
         const jobCancelSchema = await runCli(
           ["--json", "tools", "schema", "jobs.cancel"],
@@ -1091,7 +844,6 @@ describe("CLI", () => {
           name: "avatars.create",
           confirmation: {
             accepted_flags: ["confirm_submit", "confirm_paid"],
-            mcp_session_gates: ["allowWrite", "allowPaid"],
             required: true,
           },
           input_schema: {
@@ -1135,20 +887,7 @@ describe("CLI", () => {
               confirm_submit: expect.objectContaining({ type: "boolean" }),
             },
           },
-          mcp_input_schema: {
-            required: ["idempotency_key", "max_spend_usd", "payload"],
-            properties: {
-              idempotency_key: expect.objectContaining({ type: "string" }),
-              max_spend_usd: expect.objectContaining({ type: "number" }),
-              model: expect.objectContaining({
-                enum: ["sume/avatar/v1.0"],
-              }),
-              payload: expect.objectContaining({
-                additionalProperties: true,
-                type: "object",
-              }),
-            },
-          },
+          mcp_input_schema: null,
           safety: expect.objectContaining({
             requires_agent_redaction: true,
             returns_sensitive_url: true,
@@ -1167,7 +906,6 @@ describe("CLI", () => {
           name: "avatar-videos.create",
           confirmation: {
             accepted_flags: ["confirm_submit", "confirm_paid"],
-            mcp_session_gates: ["allowWrite", "allowPaid"],
             required: true,
           },
           input_schema: {
@@ -1195,33 +933,15 @@ describe("CLI", () => {
               }),
             },
           },
-          mcp_input_schema: {
-            required: ["idempotency_key", "max_spend_usd"],
-            anyOf: expect.arrayContaining([
-              expect.objectContaining({ required: ["payload"] }),
-              expect.objectContaining({ required: ["avatar_handle", "script"] }),
-            ]),
-            properties: {
-              avatar_handle: expect.objectContaining({ type: "string" }),
-              idempotency_key: expect.objectContaining({ type: "string" }),
-              max_spend_usd: expect.objectContaining({ type: "number" }),
-              product_image: expect.objectContaining({ type: "string" }),
-              quality: expect.objectContaining({
-                enum: ["standard", "plus", "max"],
-                type: "string",
-              }),
-              scene_image_url: expect.objectContaining({ type: "string" }),
-              scene_prompt: expect.objectContaining({ type: "string" }),
-              script: expect.objectContaining({ type: "string" }),
-              payload: expect.objectContaining({
-                additionalProperties: true,
-                type: "object",
-              }),
-            },
-          },
+          mcp_input_schema: null,
           execution: {
             generation_execution: "sume_api",
             generation_runtime: "sume_api",
+            mcp_tool: null,
+          },
+          mcp: {
+            status: "coming_soon",
+            launched: false,
           },
         });
         expect(parsedAvatarVideoSchema.input_schema.required ?? []).not.toContain(
@@ -1230,23 +950,11 @@ describe("CLI", () => {
         expect(
           parsedAvatarVideoSchema.input_schema.properties.script.description,
         ).toContain("4-60 seconds");
-        expect(
-          parsedAvatarVideoSchema.mcp_input_schema.properties.payload.description,
-        ).toContain("Prefer top-level friendly fields");
-        expect(
-          parsedAvatarVideoSchema.mcp_input_schema.properties.scene_prompt.description,
-        ).toContain("Normalizes to scene");
         expect(parsedAvatarVideoSchema.constraints).toContain(
           "avatar_handle is required for flag-built requests.",
         );
-        expect(parsedAvatarVideoSchema.constraints).toContain(
-          "For MCP, use either exact payload or top-level friendly fields, not both.",
-        );
         expect(
           parsedAvatarVideoSchema.input_schema.properties,
-        ).not.toHaveProperty("background");
-        expect(
-          parsedAvatarVideoSchema.mcp_input_schema.properties,
         ).not.toHaveProperty("background");
         const imageSchema = await runCliFailure(
           ["--json", "tools", "schema", "images.create"],

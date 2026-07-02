@@ -14,7 +14,8 @@ public HTTPS URLs directly.
 
 ```bash
 sume tools schema assets.create --json
-sume tools schema assets.upload_file --json
+sume tools schema assets.upload_url --json
+sume tools schema assets.complete --json
 sume tools schema assets.download_url --json
 ```
 
@@ -34,18 +35,8 @@ echo the original source URL in readback.
 
 ## Direct Upload
 
-For MCP, prefer:
-
-```bash
-sume mcp --toolsets assets --allow-write
-```
-
-Call `assets.upload_file` with a local path and content type. It performs
-upload-url, signed PUT, and complete internally without returning the signed URL
-or local absolute path.
-
-For shell workflows, use `assets upload-url`, PUT bytes outside the CLI, then
-`assets complete`. Never paste signed URLs into reports.
+Use `assets upload-url`, PUT bytes outside the CLI, then `assets complete`.
+Never paste signed URLs into reports.
 
 ## Download
 

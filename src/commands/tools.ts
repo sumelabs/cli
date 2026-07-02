@@ -7,14 +7,14 @@ import { renderResult } from "../lib/render.js";
 export function registerToolsCommand(program: Command) {
   const tools = program
     .command("tools")
-    .description("Discover Sume CLI and MCP tool contracts.")
+    .description("Discover Sume CLI command schemas.")
     .action((_options, command: Command) =>
       showSubcommandHelp(command, { defaultSubcommand: "list" }),
     );
 
   tools
     .command("list")
-    .description("List agent-facing tools with safety metadata.")
+    .description("List agent-facing CLI command schemas with safety metadata.")
     .action((_options, command: Command) => {
       renderResult(
         {
@@ -36,7 +36,7 @@ export function registerToolsCommand(program: Command) {
 
   tools
     .command("schema")
-    .description("Show one tool schema and safety contract.")
+    .description("Show one CLI command schema and safety contract.")
     .argument("<name>", "Tool name, for example jobs.result.")
     .action((name: string, _options, command: Command) => {
       const tool = getToolSchema(requireString(name, "name"));

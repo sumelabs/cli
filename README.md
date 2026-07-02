@@ -1,6 +1,6 @@
 # Sume CLI
 
-Agent-first CLI and MCP tooling for the future `sume.com` public API platform.
+Agent-first CLI tooling for the future `sume.com` public API platform.
 
 This repository contains the public CLI for the `sume.com` developer platform.
 It follows these product boundaries:
@@ -8,7 +8,6 @@ It follows these product boundaries:
 - thin CLI wrappers over public API endpoints;
 - stable JSON for agents and scripts;
 - explicit API-key configuration;
-- MCP tools built from the same API/client boundary;
 - no direct dependency on app internals, databases, queues, or provider APIs.
 
 ## Status
@@ -170,7 +169,6 @@ sume jobs events <job_id> --agent --json
 sume jobs result <job_id> --agent --json
 sume jobs download <job_id> --output-dir ./outputs --json
 sume jobs cancel <job_id> --confirm-submit --agent --json
-sume mcp
 sume tools list --json
 sume tools schema jobs.result --json
 sume tools schema avatars.create_photo_url --json
@@ -192,11 +190,9 @@ API; it reports version, auth source, API base URL, safety gates, and tool
 counts.
 
 `sume tools list --json` and `sume tools schema <name> --json` expose the
-current agent-facing command contracts, safety metadata, confirmation
-requirements, and separate CLI/MCP input contracts. `input_schema` describes
-CLI flags. `mcp_input_schema` describes the MCP tool payload; submit MCP tools
-use `{ "payload": { ...apiBody }, "idempotency_key": "..." }`, with
-`avatars.create` also accepting an optional public `model`.
+current agent-facing CLI command contracts, safety metadata, confirmation
+requirements, and launch status metadata. `input_schema` describes CLI flags.
+MCP fields are reported as not launched yet in this public CLI release.
 
 Supported API command groups call only current `api.sume.com` API routes:
 
@@ -289,126 +285,19 @@ sume skills install sume-assets --json
 The bundled skills are current `api.sume.com` packs: `sume`, `sume-tools`,
 `sume-assets`, `sume-avatar`, and `sume-avatar-video`. They document auth,
 redaction, Avatar 1.0, Avatar Video 1.0, batch planning, jobs, balance, usage,
-MCP setup, and advanced compatibility asset handling. They explicitly exclude
+schema discovery, and advanced compatibility asset handling. They explicitly exclude
 old `sume.so` Brand, Ads, Face Swap, generic generation, raw provider,
 billing-write, and file workflows.
 
 ## MCP
 
-Start the local stdio MCP server:
+Sume MCP is coming soon and is not part of this public CLI launch release yet.
+Use direct CLI commands today for auth, schema discovery, Avatar, Avatar Video,
+jobs, balance, and usage workflows.
 
-```bash
-sume mcp
-```
-
-Set up a supported agent client with the default read-only MCP server:
-
-```bash
-sume setup agent --agent codex
-sume setup agent --agent claude-code
-sume setup agent --agent cursor
-```
-
-Install the read-only MCP server config for a supported client:
-
-```bash
-sume mcp install --agent codex
-sume mcp install --agent claude-code
-sume mcp install --agent cursor
-```
-
-Preview the generated config without writing files:
-
-```bash
-sume mcp install --agent codex --dry-run
-sume mcp install --agent claude-code --dry-run
-sume mcp install --agent cursor --dry-run
-```
-
-Check local MCP client readiness:
-
-```bash
-sume mcp doctor
-sume mcp doctor --agent codex --json
-```
-
-The generated snippets run only `sume mcp`, which exposes the default read-only
-toolset. They do not enable write or paid MCP tools.
-
-The MCP toolset includes read-only inspection tools:
-
-- `tools.list`
-- `tools.schema`
-- `health.service`
-- `health.v1`
-- `account.me`
-- `catalog.list`
-- `jobs.list`
-- `jobs.get`
-- `jobs.status`
-- `jobs.events`
-- `jobs.result`
-- `jobs.wait`
-- `avatars.list`
-- `avatars.get`
-- `avatars.wait`
-- `avatar-videos.list`
-- `avatar-videos.get`
-
-Submit tools are not exposed by default. Advanced compatibility asset tools are
-also not exposed by default because `/v1/assets/*` is hidden from the launch
-OpenAPI/catalog. To expose asset registration for a deliberate internal or
-agent session, opt into the asset toolset and the write gate:
-
-```bash
-sume mcp --toolsets account,catalog,jobs,assets --allow-write
-```
-
-That adds:
-
-- `assets.create`
-- `assets.upload_url`
-- `assets.upload_file`
-- `assets.complete`
-- `jobs.cancel`
-
-`assets.upload_file` is an MCP-only local workflow helper. It creates a signed
-upload URL, PUTs the supplied local file bytes to that URL, completes the asset,
-and returns only agent-redacted metadata. It does not return the signed upload
-URL, storage headers, or the local absolute file path. MCP local file uploads
-are capped at 512 MiB in this release; use the lower-level public API upload
-URL flow when a host needs full control.
-
-Paid generation avatar submit tools also require the paid gate:
-
-```bash
-sume mcp --toolsets account,catalog,jobs,avatars,avatar-videos --allow-write --allow-paid
-```
-
-That adds:
-
-- `avatars.create`
-- `avatars.create_prompt`
-- `avatars.create_props`
-- `avatars.create_photo_url`
-- `avatar-videos.create`
-
-The submit MCP tools are annotated as non-read-only, URL-returning, and
-agent-redaction-required. Asset write helpers are advanced compatibility write
-operations but not paid generation calls. Avatar and avatar-video submit tools use
-`generation_runtime: sume_api`. `avatars.create` remains the
-exact-payload escape hatch. The typed avatar helpers build common Avatar 1.0
-prompt, profile, and public-photo URL requests, add normalized `avatar_summary`
-fields for agent readback, and keep signed upload/download URLs internal. Use
-`avatars.wait` to poll an avatar job and read grouped public artifact URLs when
-available. Their `tools schema` entries also show the required
-confirmation gates: CLI submit commands require `--confirm-submit` or
-`--confirm-paid` for paid generation submits and `--confirm-submit` for asset
-registration. MCP asset registration requires a session started with
-`--allow-write`; paid generation submits require both `--allow-write` and
-`--allow-paid`. Future file, billing-write, and unsupported generation tools
-must remain behind explicit opt-in gates after public API contracts exist.
-For a toolset-focused setup guide, see [docs/mcp-toolsets.md](docs/mcp-toolsets.md).
+The open-source repository may contain MCP implementation code while the
+capability is being prepared. Public MCP setup and server startup are not
+launched yet, and the CLI does not write MCP client config in this release.
 
 ## Website
 

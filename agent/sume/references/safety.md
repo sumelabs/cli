@@ -29,9 +29,6 @@ rm -f "$login_log" "$login_log.status"
   completion, and job cancellation.
 - `--confirm-paid`: paid generation submits such as Avatar 1.0 and Avatar Video
   1.0 creation.
-- MCP `--allow-write`: exposes mutating non-paid tools.
-- MCP `--allow-paid`: exposes paid generation submit tools and should be paired
-  with `--allow-write` for submit actions.
 
 ## Sensitive Outputs
 
@@ -50,3 +47,6 @@ compatibility tooling only and is hidden from the launch OpenAPI/catalog.
 Excluded until public contracts exist: old Brand, Ads, Face Swap, generic
 image/video generation, arbitrary file APIs, provider ids, and billing-write
 operations.
+
+Sume MCP is coming soon and is not part of this public CLI launch release yet.
+Use direct CLI commands today.

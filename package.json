@@ -1,13 +1,12 @@
 {
   "name": "@sumelabs/cli",
   "version": "0.1.0",
-  "description": "Agent-first CLI and MCP tooling for sume.com",
+  "description": "Agent-first CLI tooling for sume.com",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "sume",
     "cli",
-    "mcp",
     "agent",
     "public-api"
   ],

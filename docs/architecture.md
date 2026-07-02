@@ -13,8 +13,8 @@ gates, version, and current tool counts.
 
 ## Public API Client
 
-`src/lib/api-client.ts` is the only HTTP boundary. Commands and MCP tools call
-this client instead of hand-rolling fetch calls.
+`src/lib/api-client.ts` is the only HTTP boundary. Commands call this client
+instead of hand-rolling fetch calls.
 
 The default base URL is:
 
@@ -52,7 +52,7 @@ Current launch-supported paths are:
 - `GET /avatar-videos/:id`
 
 The Avatar 1.0 and Avatar Video 1.0 model-run routes are public API operations
-backed by the configured `api.sume.com` runtime. Commands and MCP tools must not
+backed by the configured `api.sume.com` runtime. Commands must not
 claim media generation has completed unless the API returns a completed
 job/result. Generic image/video routes and raw provider model ids are not part
 of the current public CLI surface.
@@ -66,21 +66,18 @@ unsupported product-specific generation routes are not called by this CLI until
 their `sume.com` public contracts are finalized. `/v1/assets/*` is advanced
 compatibility tooling only because it is hidden from the launch
 OpenAPI/catalog. Launch generation inputs are URL-first. Signed URL responses
-must be redacted in agent output. MCP may compose advanced compatibility asset
-routes into local workflow helpers, such as `assets.upload_file`, only when the
-asset toolset is explicitly selected.
+must be redacted in agent output. MCP is coming soon and is not part of this
+public CLI launch release yet.
 
 ## Agent Output And Tool Schemas
 
 `src/lib/tool-registry.ts` is the source of truth for the current agent-facing
 tool list, command examples, and safety metadata used by `sume tools`.
 
-Tool schemas intentionally expose two input contracts when an MCP tool exists:
-`input_schema` for CLI flags and `mcp_input_schema` for the MCP tool call shape.
-Submit MCP tools use a stable envelope with `payload` for the exact public API
-request body and optional `idempotency_key` for safe retries. Confirmation
-metadata should stay explicit so agents can distinguish CLI confirmation flags
-from MCP session gates.
+Tool schemas expose `input_schema` for direct CLI flags. `mcp_input_schema` is
+`null` in this public launch release because MCP is coming soon and is not
+launched yet. Confirmation metadata should stay explicit so agents can
+distinguish read operations from writes and paid submits.
 
 `src/lib/agent-output.ts` redacts URLs and sensitive account/workspace fields
 for agent-readable job recovery and MCP responses. Raw public API passthrough
@@ -88,8 +85,8 @@ should remain available only through non-agent command modes when a human
 explicitly needs the original response.
 
 Submit and job-read tool schemas should mark that URL-like fields may appear in
-raw API responses. Agent-safe CLI and MCP paths must add next-step guidance and
-redact those fields before returning output to automation.
+raw API responses. Agent-safe CLI paths must add next-step guidance and redact
+those fields before returning output to automation.
 
 ## Auth And Config
 
@@ -111,25 +108,16 @@ The public API base defaults to `https://api.sume.com/v1`. Browser login derives
 
 ## MCP
 
-`src/mcp/server.ts` exposes a testable server factory. `src/mcp/tools.ts`
-contains tool definitions that use the same platform/client boundary as the CLI.
-`src/mcp/transports/stdio.ts` is the local stdio entrypoint.
+MCP is coming soon and is not part of this public CLI launch release yet.
+`src/mcp/server.ts`, `src/mcp/tools.ts`, and `src/mcp/transports/stdio.ts` remain
+in the open-source repository for future launch work, but the public `sume mcp`
+and `sume setup agent` command paths report coming-soon status and do not start
+a server or write client config.
 
-Default MCP exposes tools, health, account, catalog, jobs, avatars, and
-avatar-videos as first-class read toolsets. Avatar, avatar-video, and job
-readback tools are marked URL-returning where raw API responses may include
-Sume-owned or signed URLs. Submit/cancel/upload-complete/upload-file tools are
-explicitly annotated as non-read-only and filtered out unless the caller selects
-the relevant toolsets and passes the appropriate opt-in flags. Advanced
-compatibility asset helpers are available only when the asset toolset is
-selected. Asset write helpers and job cancellation require write opt-in only.
-Paid generation avatar and avatar-video submit tools require both write and paid
-opt-in flags.
-
-`tools.list` and `tools.schema` are available inside MCP so clients can discover
-the same contracts exposed by `sume tools list --json` and
-`sume tools schema <name> --json`. `jobs.wait` is a read-only local polling
-helper over `/jobs/:id/status`; it does not create live generation work.
+Direct CLI commands are the supported launch surface today. `sume tools list
+--json` and `sume tools schema <name> --json` expose CLI command schemas with
+`mcp_input_schema: null` and `mcp.status: "coming_soon"` so agents can discover
+current command contracts without treating MCP as launched.
 
 Bundled agent skill packs live under `agent/` and ship with the npm/package
 artifact. `src/lib/skills-registry.ts` lists, exports, installs, updates, and

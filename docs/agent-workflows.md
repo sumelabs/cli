@@ -11,7 +11,7 @@ Use this sequence for current Avatar 1.0 and Avatar Video 1.0 prompts.
 ```bash
 sume doctor --agent --json
 sume catalog list --json
-sume tools schema jobs.wait --json
+sume tools schema jobs.watch --json
 sume tools schema jobs.download --json
 sume tools schema avatars.create --json
 sume tools schema avatars.batch.plan --json
@@ -121,24 +121,12 @@ After any submit command:
 
 1. Capture `data.job.id` or `data.request_id` from the redacted response.
 2. Poll with `sume jobs watch <job_id> --agent --json` when using the CLI.
-3. Poll with MCP `jobs.wait` when using MCP.
-4. Read completed output with `sume jobs result <job_id> --agent --json` or MCP
-   `jobs.result`.
-5. Save media only on request with
+3. Read completed output with `sume jobs result <job_id> --agent --json`.
+4. Save media only on request with
    `sume jobs download <job_id> --output-dir ./outputs --json`.
 
-MCP submit tools return the same agent-safe next-step guidance. They use the
-MCP envelope:
-
-```json
-{
-  "payload": {
-    "avatar_handle": "presenter",
-    "input": { "type": "prompt", "prompt": "A friendly presenter" }
-  },
-  "idempotency_key": "optional-safe-retry-key"
-}
-```
+Sume MCP is coming soon and is not part of this public CLI launch release yet.
+Use direct CLI commands for current automation.
 
 ## Safety
 

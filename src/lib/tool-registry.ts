@@ -26,7 +26,6 @@ export type ToolSchema = {
   description: string;
   confirmation?: {
     accepted_flags: string[];
-    mcp_session_gates: string[];
     required: boolean;
   };
   input_schema: JsonSchema;
@@ -40,6 +39,10 @@ export type ToolSchema = {
     mcp_tool: string | null;
     generation_execution: GenerationExecution;
     generation_runtime: GenerationRuntime;
+  };
+  mcp: {
+    status: "coming_soon";
+    launched: false;
   };
   constraints?: string[];
 };
@@ -105,7 +108,6 @@ const communicationProperties = {
 };
 const submitConfirmation = {
   accepted_flags: ["confirm_submit", "confirm_paid"],
-  mcp_session_gates: ["allowWrite", "allowPaid"],
   required: true,
 };
 const avatarModelProperties = {
@@ -117,7 +119,6 @@ const avatarModelProperties = {
 };
 const writeConfirmation = {
   accepted_flags: ["confirm_submit"],
-  mcp_session_gates: ["allowWrite"],
   required: true,
 };
 const mcpSubmitProperties = {
@@ -379,17 +380,17 @@ const staticToolDefinitions: Record<string, StaticToolDefinition> = {
     ],
   },
   "tools.list": {
-    command: "MCP tools.list",
-    description: "List local Sume CLI and MCP tool contracts with safety metadata.",
+    command: "sume tools list --json",
+    description: "List local Sume CLI command schemas with safety metadata.",
     input_schema: objectSchema({}),
     examples: ["sume tools list --json"],
     next_steps: [
-      "Use tools.schema from MCP or sume tools schema <name> --json to inspect one contract.",
+      "Use sume tools schema <name> --json to inspect one command contract.",
     ],
   },
   "tools.schema": {
-    command: "MCP tools.schema",
-    description: "Read one local Sume CLI or MCP tool contract by name.",
+    command: "sume tools schema <name> --json",
+    description: "Read one local Sume CLI command contract by name.",
     input_schema: objectSchema(
       {
         name: { ...stringProperty, minLength: 1 },
@@ -398,7 +399,7 @@ const staticToolDefinitions: Record<string, StaticToolDefinition> = {
     ),
     examples: ["sume tools schema jobs.result --json"],
     next_steps: [
-      "Use the returned mcp_input_schema for MCP payloads and input_schema for CLI flags.",
+      "Use the returned input_schema to construct direct CLI commands.",
     ],
   },
   "catalog.list": {
@@ -742,13 +743,11 @@ const staticToolDefinitions: Record<string, StaticToolDefinition> = {
       "MCP assets.upload_file { path: './reference.png', content_type: 'image/png', media_type: 'image' }",
     ],
     next_steps: [
-      "The signed upload URL is used internally and redacted from MCP output.",
+      "Sume MCP is coming soon and this helper is not part of the public CLI launch surface yet.",
       "Use assets.get to confirm the asset status later.",
     ],
     constraints: [
-      "Available only when the MCP server is started with --allow-write.",
-      "Hidden from the default launch MCP server; select --toolsets assets explicitly.",
-      "MCP local file uploads are limited to 512 MiB.",
+      "MCP is coming soon and is not launched in this CLI release yet.",
     ],
   },
   "assets.complete": {
@@ -1124,7 +1123,7 @@ const staticToolDefinitions: Record<string, StaticToolDefinition> = {
     ],
     constraints: [
       "Runs through an internal Sume cost/readiness preview before submit.",
-      "Requires MCP --allow-write --allow-paid gates and per-call max_spend_usd.",
+      "MCP is coming soon and is not launched in this CLI release yet.",
     ],
     generation_execution: "sume_api",
     generation_runtime: "sume_api",
@@ -1158,7 +1157,7 @@ const staticToolDefinitions: Record<string, StaticToolDefinition> = {
     ],
     constraints: [
       "Runs through an internal Sume cost/readiness preview before submit.",
-      "Requires MCP --allow-write --allow-paid gates and per-call max_spend_usd.",
+      "MCP is coming soon and is not launched in this CLI release yet.",
     ],
     generation_execution: "sume_api",
     generation_runtime: "sume_api",
@@ -1191,7 +1190,7 @@ const staticToolDefinitions: Record<string, StaticToolDefinition> = {
     constraints: [
       "Runs through an internal Sume cost/readiness preview before submit.",
       "Local file upload is deferred until the public URL-first upload helper is available.",
-      "Requires MCP --allow-write --allow-paid gates and per-call max_spend_usd.",
+      "MCP is coming soon and is not launched in this CLI release yet.",
     ],
     generation_execution: "sume_api",
     generation_runtime: "sume_api",
@@ -1562,7 +1561,9 @@ const cliOnlyToolDefinitions: Record<string, StaticToolDefinition> = {
 };
 
 export const toolSchemas: ToolSchema[] = [
-  ...mcpTools.map((tool) => buildSchema(tool.name, tool.description, tool.name)),
+  ...mcpTools
+    .map((tool) => buildSchema(tool.name, tool.description, tool.name))
+    .filter((tool) => !tool.command.startsWith("MCP ")),
   ...Object.entries(cliOnlyToolDefinitions).map(([name, definition]) =>
     buildSchema(name, definition.description ?? name, null),
   ),
@@ -1600,19 +1601,28 @@ function buildSchema(
     description: definition.description ?? description,
     input_schema: definition.input_schema,
     inputs: definition.input_schema,
-    mcp_input_schema: mcpTool
-      ? (definition.mcp_input_schema ?? definition.input_schema)
-      : null,
+    mcp_input_schema: null,
     examples: definition.examples ?? examplesForTool(name),
     next_steps: definition.next_steps ?? nextStepsForTool(name),
     safety,
     execution: {
       cli_command: definition.command,
-      mcp_tool: mcpTool,
+      mcp_tool: null,
       generation_execution: generationExecution,
       generation_runtime: generationRuntime,
     },
-    ...(definition.confirmation ? { confirmation: definition.confirmation } : {}),
+    mcp: {
+      status: "coming_soon",
+      launched: false,
+    },
+    ...(definition.confirmation
+      ? {
+          confirmation: {
+            accepted_flags: definition.confirmation.accepted_flags,
+            required: definition.confirmation.required,
+          },
+        }
+      : {}),
     ...(definition.constraints ? { constraints: definition.constraints } : {}),
   };
 }
