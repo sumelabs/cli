@@ -1,0 +1,629 @@
+import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { relative } from "node:path";
+import { ApiError } from "../api/errors.ts";
+import type { Artifact, CatalogModel, Estimate, Job, JobEvent, ResultResponse, StatusResponse } from "../api/types.ts";
+import type { Context } from "../context.ts";
+import { closest, type FlagSpec } from "../lib/args.ts";
+import { downloadTo, type PlannedPath, planPaths, type SavedFile } from "../lib/download.ts";
+import { CliError, ExitCode, UsageError } from "../lib/errors.ts";
+import { formatBytes, formatDuration, formatUsd } from "../lib/ui.ts";
+import { parseDuration, waitForJob } from "../lib/wait.ts";
+
+// Flags shared by the commands that build a request (`run`, `estimate`).
+export const INPUT_FLAGS: readonly FlagSpec[] = [
+  {
+    name: "prompt",
+    short: "p",
+    type: "string",
+    placeholder: "<text>",
+    section: "Inputs",
+    description: "The prompt, instead of the second argument",
+  },
+  {
+    name: "image",
+    short: "i",
+    type: "string",
+    multiple: true,
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Image to edit or follow (image models), or the first frame (video models)",
+  },
+  {
+    name: "end-image",
+    type: "string",
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Last frame, for video models",
+  },
+  {
+    name: "video",
+    type: "string",
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Source clip, for video-to-video, lip-sync and captions",
+  },
+  {
+    name: "audio",
+    type: "string",
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Speech, for lip-sync models",
+  },
+  {
+    name: "ref-image",
+    type: "string",
+    multiple: true,
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Reference image, for video models",
+  },
+  {
+    name: "ref-video",
+    type: "string",
+    multiple: true,
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Reference clip, for video models",
+  },
+  {
+    name: "ref-audio",
+    type: "string",
+    multiple: true,
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Reference audio, for video models",
+  },
+  {
+    name: "mask",
+    type: "string",
+    placeholder: "<url|file>",
+    section: "Inputs",
+    description: "Edit mask, for image models",
+  },
+  {
+    name: "aspect-ratio",
+    short: "a",
+    type: "string",
+    placeholder: "<ratio>",
+    section: "Settings",
+    description: "Aspect ratio, like 16:9 or 9:16",
+  },
+  {
+    name: "resolution",
+    short: "r",
+    type: "string",
+    placeholder: "<res>",
+    section: "Settings",
+    description: "Resolution, like 480p, 720p or 2K",
+  },
+  {
+    name: "duration",
+    short: "d",
+    type: "number",
+    min: 1,
+    integer: true,
+    placeholder: "<seconds>",
+    section: "Settings",
+    description: "Length in whole seconds (video, lip-sync, captions)",
+  },
+  {
+    name: "quality",
+    short: "q",
+    type: "string",
+    placeholder: "<level>",
+    section: "Settings",
+    description: "Quality, like low, medium or high (image)",
+  },
+  {
+    name: "num-images",
+    short: "n",
+    type: "number",
+    min: 1,
+    integer: true,
+    placeholder: "<n>",
+    section: "Settings",
+    description: "How many images, 1–4",
+  },
+  {
+    name: "format",
+    type: "string",
+    placeholder: "<ext>",
+    section: "Settings",
+    description: "Image format: png, jpeg or webp",
+  },
+  {
+    name: "size",
+    type: "string",
+    placeholder: "<WxH|preset>",
+    section: "Settings",
+    description: "Image size, like 1024x1536 or square_hd",
+  },
+  {
+    name: "background",
+    type: "string",
+    placeholder: "<mode>",
+    section: "Settings",
+    description: "auto, transparent or opaque (GPT Image 2.5)",
+  },
+  {
+    name: "generate-audio",
+    type: "boolean",
+    section: "Settings",
+    description: "Ask a video model for sound; --no-generate-audio for silence",
+  },
+  {
+    name: "set",
+    type: "string",
+    multiple: true,
+    placeholder: "<key=value>",
+    section: "Settings",
+    description: "Any other request field, JSON-parsed when it can be: captions.style=glass",
+  },
+  {
+    name: "input",
+    type: "string",
+    placeholder: "<file|->",
+    section: "Settings",
+    description: "Start from a JSON request body; - reads stdin",
+  },
+];
+
+export const WAIT_FLAGS: readonly FlagSpec[] = [
+  {
+    name: "output",
+    short: "o",
+    type: "string",
+    placeholder: "<path>",
+    section: "Output",
+    description: 'Save to this file, into this directory, or by a template like "out/{model}-{job}-{index}.{ext}"',
+  },
+  {
+    name: "no-download",
+    type: "boolean",
+    section: "Output",
+    description: "Print the result URLs instead of saving files",
+  },
+  {
+    name: "timeout",
+    type: "string",
+    placeholder: "<duration>",
+    section: "Output",
+    description: "Stop waiting after this long, like 90s or 20m (default 30m)",
+  },
+  { name: "open", type: "boolean", section: "Output", description: "Open the file when it is saved" },
+  {
+    name: "all-files",
+    type: "boolean",
+    section: "Output",
+    description: "Also save intermediate files, like a video's poster frame",
+  },
+  {
+    name: "logs",
+    type: "boolean",
+    section: "Output",
+    description: "Print the job's events as they happen (with --json, add them to the document)",
+  },
+];
+
+export const DEFAULT_TIMEOUT = "30m";
+
+/** `--timeout`, parsed up front so a typo never costs a submit. */
+export function timeoutFlag(flags: Record<string, unknown>): number {
+  return parseDuration(String(flags.timeout ?? DEFAULT_TIMEOUT));
+}
+
+/**
+ * Where the API priced something other than what was asked. The estimate
+ * clamps quietly (a 99 s request on a 15 s model is priced as 15 s), so the
+ * difference is worth a warning before anyone relies on the number.
+ */
+export function pricingNotes(body: Record<string, unknown>, estimate: Estimate): string[] {
+  const notes: string[] = [];
+  const asked = body.duration ?? body.duration_seconds;
+  const priced = estimate.billing?.duration_seconds;
+  if (typeof asked === "number" && typeof priced === "number" && asked !== priced) {
+    notes.push(
+      `Priced for ${priced}s, not the ${asked}s asked. Check the model's limits: sume models ${estimate.model}`,
+    );
+  }
+  const askedRes = body.resolution;
+  const pricedRes = estimate.billing?.resolution;
+  if (typeof askedRes === "string" && pricedRes && askedRes.toLowerCase() !== pricedRes.toLowerCase()) {
+    notes.push(`Priced at ${pricedRes}, not the ${askedRes} asked.`);
+  }
+  return notes;
+}
+
+/** Look a model up in the catalog, with a "did you mean" on a miss. */
+export async function resolveModel(ctx: Context, id: string): Promise<CatalogModel> {
+  const client = ctx.client();
+  try {
+    return await client.getModel(id, ctx.signal);
+  } catch (error) {
+    if (!(error instanceof ApiError) || (error.status !== 404 && error.apiCode !== "model_not_found")) throw error;
+    const models = await client.listModels(ctx.signal).catch(() => [] as CatalogModel[]);
+    const guess = closest(
+      id,
+      models.map((m) => m.id),
+    );
+    throw new CliError(`No model "${id}" on ${new URL(client.baseUrl).host}.`, {
+      exitCode: ExitCode.Rejected,
+      code: "model_not_found",
+      hint: guess
+        ? `Did you mean ${guess}? See every model with \`sume models\`.`
+        : "See every model with `sume models`.",
+    });
+  }
+}
+
+export interface FollowOptions {
+  jobId: string;
+  /** Parsed `--timeout`, checked before anything was submitted. */
+  timeoutMs: number;
+  model: string | null | undefined;
+  /** When the clock started, for "completed in …". */
+  startedAt: number;
+  firstDelaySeconds?: number | null | undefined;
+  flags: Record<string, unknown>;
+  /** The estimate, when one was made. */
+  usd?: string | undefined;
+  /** Report the job's own run time (created → completed), not time spent waiting here. */
+  jobTime?: boolean;
+  /** The submit matched an earlier one by Idempotency-Key: this run paid nothing. */
+  replayed?: boolean;
+  /** Extra fields for the `--json` document. */
+  extra?: Record<string, unknown>;
+}
+
+export interface FollowResult {
+  status: StatusResponse;
+  files: SavedFile[];
+  artifacts: Artifact[];
+}
+
+/**
+ * Wait for a job, then save its files: the shared tail of `run` and
+ * `jobs wait`. Returns the exit code.
+ */
+export async function followJob(ctx: Context, options: FollowOptions): Promise<number> {
+  const { ui, json } = ctx;
+  const client = ctx.client();
+  const { flags } = options;
+  const timeoutMs = options.timeoutMs;
+  const label = options.model ?? "job";
+  const price = options.usd
+    ? ` · ${formatUsd(options.usd)}${options.replayed ? " (paid by the first submit)" : ""}`
+    : "";
+  ctx.jobId = options.jobId;
+
+  const tail = flags.logs === true ? eventTail(ctx, options.jobId) : undefined;
+  const printEvents = async () => {
+    if (!tail) return;
+    for (const event of await tail.pull())
+      if (!json) for (const line of eventLines(ctx, event, tail.firstAt)) ui.info(line);
+  };
+  const status = await waitForJob(client, options.jobId, {
+    timeoutMs,
+    signal: ctx.signal,
+    firstDelaySeconds: options.firstDelaySeconds,
+    sleep: ctx.sleep,
+    onPoll: printEvents,
+    onStatus: (s) => ui.spin(progressLine(ctx, label + price, s, options.startedAt)),
+    onRetry: (error, consecutive) => {
+      ui.debug(`status read failed, retrying: ${error.message}`);
+      // A blip is normal and stays quiet; an outage is worth one line.
+      if (consecutive === LOST_CONTACT_AFTER && !json) {
+        ui.warn(`Lost contact with the API (${error.message}). Still trying; the job keeps running on Sume.`);
+      }
+    },
+    onRecover: (failures) => {
+      if (failures >= LOST_CONTACT_AFTER && !json) ui.info(ui.c.dim("Back in contact with the API."));
+    },
+    onDelay: (delay, hint) => ui.debug(`next status read in ${delay}s${hint !== null ? ` (API hint ${hint}s)` : ""}`),
+  });
+  ui.stopSpinner();
+  await printEvents();
+  const logs = tail ? { events: tail.all } : {};
+
+  if (status.sume_status !== "completed") {
+    const job = await client.getJob(options.jobId, ctx.signal).catch(() => undefined);
+    return reportFailure(ctx, { ...options, extra: { ...options.extra, ...logs } }, status, job);
+  }
+
+  const result = await readResult(ctx, options.jobId);
+  const artifacts = result.result?.artifacts ?? [];
+  const job = result.job ?? status.job;
+  const ranMs =
+    options.jobTime && job?.completed_at ? Date.parse(job.completed_at) - Date.parse(job.created_at) : Number.NaN;
+  const elapsedMs = Number.isFinite(ranMs) ? ranMs : Date.now() - options.startedAt;
+  const elapsed = formatDuration(elapsedMs);
+  const download = flags["no-download"] !== true;
+  const wanted = selectArtifacts(artifacts, flags["all-files"] === true);
+
+  const files: SavedFile[] = [];
+  // One file that cannot be saved does not stop the others: each one saved is
+  // paid for, and the report says exactly which are missing.
+  const failed: { artifact: Artifact; path: string; error: CliError }[] = [];
+  if (download && wanted.length > 0) {
+    const planned = await planPaths(wanted, {
+      output: flags.output as string | undefined,
+      model: options.model,
+      jobId: options.jobId,
+      cwd: ctx.cwd,
+    });
+    for (const [i, artifact] of wanted.entries()) {
+      const { path, existing } = planned[i] as PlannedPath;
+      const kept = existing ? await stat(path).catch(() => undefined) : undefined;
+      if (kept) {
+        files.push({ path, bytes: kept.size, artifact, existing: true });
+        continue;
+      }
+      ui.spin(`Saving ${relative(ctx.cwd, path) || path}`);
+      try {
+        const bytes = await downloadTo(artifact.url, path, {
+          userAgent: ctx.userAgent,
+          signal: ctx.signal,
+          sleep: ctx.sleep,
+          expect: { bytes: artifact.size_bytes, sha256: artifact.checksum_sha256, kind: artifact.type },
+        });
+        files.push({ path, bytes, artifact });
+      } catch (error) {
+        if (ctx.signal.aborted || !(error instanceof CliError)) throw error;
+        failed.push({ artifact, path, error });
+      }
+    }
+    ui.stopSpinner();
+  }
+  const again = `sume jobs wait ${options.jobId}${flags.output ? ` -o ${shellQuote(String(flags.output))}` : ""}`;
+  const partial = failed.length > 0 && {
+    code: (failed[0] as { error: CliError }).error.code,
+    message: `Saved ${files.length} of ${wanted.length} files. ${failed.map((f) => f.error.message).join(" ")}`,
+    hint: `Get the missing ${failed.length === 1 ? "file" : "files"} with: ${again}`,
+  };
+
+  if (json) {
+    ui.json({
+      ...(partial ? { error: { ...partial, job_id: options.jobId } } : {}),
+      job: { id: options.jobId, model: options.model ?? null, status: status.sume_status },
+      ...(options.usd ? { usd: options.usd } : {}),
+      elapsed_ms: elapsedMs,
+      artifacts: artifacts.map((a) => {
+        const file = files.find((f) => f.artifact === a);
+        if (file)
+          return { ...a, path: file.path, bytes: file.bytes, ...(file.existing ? { already_saved: true } : {}) };
+        const miss = failed.find((f) => f.artifact === a);
+        return miss ? { ...a, path: null, error: miss.error.message } : a;
+      }),
+      ...options.extra,
+      ...logs,
+    });
+  } else {
+    ui.success(`${label} completed in ${elapsed}${price}`);
+    if (artifacts.length === 0) ui.warn("The job completed without files.");
+    if (download) {
+      for (const file of files) {
+        const note = file.existing ? "already saved" : describeFile(file);
+        ui.info(`  ${ctx.ui.c.bold(display(ctx, file.path))}  ${ctx.ui.c.dim(note)}`);
+      }
+      // stdout carries the paths alone, for pipes: `sume run … | xargs open`.
+      if (!ui.options.stdout.isTTY || ui.options.quiet) for (const file of files) ui.out(file.path);
+    } else {
+      for (const artifact of wanted) ui.out(artifact.url);
+    }
+    const skipped = artifacts.length - wanted.length;
+    if (skipped > 0) {
+      ui.info(
+        ui.c.dim(
+          `  ${skipped} intermediate file${skipped === 1 ? "" : "s"} (like a poster frame) not saved; --all-files keeps them`,
+        ),
+      );
+    }
+  }
+  if (partial && !json) ui.error(partial.message, partial.hint);
+  if (flags.open === true && files[0]) openFile(files[0].path);
+  return partial ? ExitCode.Error : ExitCode.Ok;
+}
+
+/** How many failed status reads in a row (each already retried) before the wait says it lost contact. */
+const LOST_CONTACT_AFTER = 3;
+
+/** Quote a path for the shell when it needs it, for commands printed as hints. */
+function shellQuote(value: string): string {
+  return /^[\w@%+=:,./-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The files a person asked for: the job's final outputs. Intermediate files
+ * (a `stage`, like a video's poster frame) come along only on request, or
+ * when a job returned nothing else.
+ */
+export function selectArtifacts(artifacts: readonly Artifact[], all: boolean): Artifact[] {
+  if (all) return [...artifacts];
+  let finals = artifacts.filter((a) => !a.stage);
+  // An image beside a video is its poster or thumbnail, even when the API
+  // leaves it unlabelled (vidu-q4 does; grok-imagine-video marks `poster`).
+  if (finals.some((a) => a.type === "video")) finals = finals.filter((a) => a.type !== "image");
+  return finals.length > 0 ? finals : [...artifacts];
+}
+
+const display = (ctx: Context, path: string) => {
+  const rel = relative(ctx.cwd, path);
+  return rel && !rel.startsWith("..") ? rel : path;
+};
+
+function describeFile(file: SavedFile): string {
+  const parts = [formatBytes(file.bytes)];
+  const { width, height, duration_ms } = file.artifact;
+  if (width && height) parts.push(`${width}×${height}`);
+  if (duration_ms) parts.push(formatDuration(duration_ms));
+  parts.push(file.artifact.content_type);
+  return parts.join(" · ");
+}
+
+function progressLine(ctx: Context, label: string, status: StatusResponse, startedAt: number): string {
+  const { c } = ctx.ui;
+  const state = status.sume_status;
+  const position =
+    status.queue_position !== null && status.queue_position !== undefined ? ` #${status.queue_position}` : "";
+  const elapsed = formatDuration(Date.now() - startedAt);
+  return `${c.bold(label)} ${c.dim("·")} ${state}${position} ${c.dim(`· ${elapsed}`)}`;
+}
+
+/**
+ * A job can report `completed` a moment before its files are attached, so
+ * an empty result is read again for a few seconds before it is believed.
+ */
+async function readResult(ctx: Context, jobId: string): Promise<ResultResponse> {
+  const client = ctx.client();
+  let result = await client.getResult(jobId, ctx.signal);
+  for (let i = 0; i < 5 && (result.result?.artifacts?.length ?? 0) === 0; i++) {
+    await ctx.sleep(1500, ctx.signal);
+    result = await client.getResult(jobId, ctx.signal);
+  }
+  return result;
+}
+
+function reportFailure(ctx: Context, options: FollowOptions, status: StatusResponse, job: Job | undefined): number {
+  return reportJobFailure(ctx, {
+    jobId: options.jobId,
+    model: options.model,
+    state: status.sume_status,
+    error: job?.error ?? status.job?.error ?? null,
+    ...(options.extra ? { extra: options.extra } : {}),
+  });
+}
+
+/** A job that ended `failed` or `canceled`: exit 5, with the API's reason. */
+export function reportJobFailure(
+  ctx: Context,
+  failure: {
+    jobId: string;
+    model: string | null | undefined;
+    state: string;
+    error: { message?: string; retryable?: boolean } | null;
+    extra?: Record<string, unknown>;
+  },
+): number {
+  const { ui } = ctx;
+  const { error, state } = failure;
+  const message = error?.message ?? (state === "canceled" ? "The job was canceled." : "The job failed.");
+  if (ctx.json) {
+    ui.json({
+      job: { id: failure.jobId, model: failure.model ?? null, status: state },
+      error: error ?? { message },
+      ...failure.extra,
+    });
+  } else {
+    ui.error(`${failure.model ?? "Job"} ${state}: ${message}`, failureHint(failure.jobId, error?.retryable));
+  }
+  return ExitCode.JobFailed;
+}
+
+function failureHint(jobId: string, retryable: boolean | undefined): string {
+  const details = `Failed jobs are refunded. Details: sume jobs get ${jobId}`;
+  return retryable ? `This may pass on a retry. ${details}` : details;
+}
+
+/** Open a file with the platform's default app, detached. */
+export function openFile(path: string): void {
+  const [command, args] =
+    process.platform === "darwin"
+      ? ["open", [path]]
+      : process.platform === "win32"
+        ? ["cmd", ["/c", "start", "", path]]
+        : ["xdg-open", [path]];
+  const child = spawn(command, args as string[], { stdio: "ignore", detached: true });
+  child.on("error", () => {});
+  child.unref();
+}
+
+/** The parts of a job a person wants to see in a list or `--json`. */
+export function jobRow(job: Job) {
+  return {
+    id: job.id,
+    model: job.model,
+    type: job.type,
+    status: job.status,
+    created_at: job.created_at,
+    completed_at: job.completed_at,
+  };
+}
+
+const FULL_JOB_ID = /^job_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
+/**
+ * A job id, or a unique prefix of one: the 8 characters the CLI puts in file
+ * names (`gpt-image-2-0ae33f04.png`) find their job among the newest 500.
+ */
+export async function resolveJobId(ctx: Context, input: string): Promise<string> {
+  const raw = input.trim();
+  if (FULL_JOB_ID.test(raw)) return raw;
+  const prefix = raw.replace(/^job_/u, "").toLowerCase();
+  if (!/^[0-9a-f-]{4,}$/u.test(prefix)) {
+    throw new UsageError(
+      `"${input}" is not a job id.`,
+      "Job ids look like job_7513b52d-3669-…; a unique start of one works too.",
+    );
+  }
+  const matches = new Set<string>();
+  let after: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const list = await ctx.client().listJobs({ limit: 100, ...(after ? { starting_after: after } : {}) }, ctx.signal);
+    for (const job of list.jobs) if (job.id.slice(4).startsWith(prefix)) matches.add(job.id);
+    if (matches.size > 1 || !list.next_cursor) break;
+    after = list.next_cursor;
+  }
+  if (matches.size === 1) return [...matches][0] as string;
+  if (matches.size === 0) {
+    throw new CliError(`No job starting with "${prefix}" among your newest 500.`, {
+      exitCode: ExitCode.Rejected,
+      code: "not_found",
+      hint: "Use the full id from `sume jobs list`.",
+    });
+  }
+  throw new UsageError(`"${input}" matches more than one job: ${[...matches].join(", ")}.`, "Give more of the id.");
+}
+
+/** One event as a line: offset from the first event, type, message, and any error under it. */
+export function eventLines(ctx: Context, event: JobEvent, firstAt: number): string[] {
+  const { c } = ctx.ui;
+  const offset = firstAt ? `+${formatDuration(Math.max(Date.parse(event.created_at) - firstAt, 0))}` : "";
+  const type =
+    event.status === "failed" ? c.red(event.type) : event.status === "succeeded" ? c.green(event.type) : event.type;
+  const lines = [`${c.dim(offset.padStart(8))}  ${type}${event.message ? `  ${c.dim(event.message)}` : ""}`];
+  const error = (event.data as { error?: { message?: string } } | undefined)?.error;
+  if (error?.message) lines.push(`${" ".repeat(10)}${c.red(error.message)}`);
+  return lines;
+}
+
+/**
+ * Follow a job's events: each call fetches them and hands back the ones not
+ * seen yet. Reads that fail are skipped; the next call catches up.
+ */
+export function eventTail(ctx: Context, jobId: string) {
+  const seen = new Set<string>();
+  const all: JobEvent[] = [];
+  let firstAt = 0;
+  return {
+    all,
+    get firstAt() {
+      return firstAt;
+    },
+    async pull(): Promise<JobEvent[]> {
+      const res = await ctx
+        .client()
+        .listEvents(jobId, undefined, ctx.signal)
+        .catch(() => undefined);
+      const fresh: JobEvent[] = [];
+      for (const event of res?.events ?? []) {
+        if (seen.has(event.id)) continue;
+        seen.add(event.id);
+        if (!firstAt) firstAt = Date.parse(event.created_at) || 0;
+        all.push(event);
+        fresh.push(event);
+      }
+      return fresh;
+    },
+  };
+}

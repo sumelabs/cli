@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/sumelabs/cli/security/advisories/new
+    about: Report security problems privately, not as an issue.
+  - name: Sume API docs
+    url: https://docs.sume.com/public-api
+    about: Models, prices, jobs, errors and webhooks.
+  - name: Account, keys and billing
+    url: https://www.sume.com/dashboard/api-keys
+    about: Create API keys and top up your balance on sume.com.

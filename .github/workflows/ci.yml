@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Smoke the built CLI
+        shell: bash
+        run: |
+          node dist/bin.js --version
+          node dist/bin.js --help > /dev/null
+          node dist/bin.js run --help > /dev/null
+          node dist/bin.js --help --json | node -e "JSON.parse(require('fs').readFileSync(0, 'utf8'))"
+
+  binary:
+    name: Standalone binary
+    # Pinned: this job relies on shellcheck, pwsh and docker from the runner image.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: node scripts/build-binaries.mjs linux-x64 linux-x64-musl
+      - name: Smoke the binaries
+        run: |
+          ./dist/bin/sume-linux-x64 --version
+          ./dist/bin/sume-linux-x64 version
+          ./dist/bin/sume-linux-x64 completion bash | bash -n
+          # A project's .env must never pick the API host (Bun loads .env into a binary's environment by default).
+          dir="$(mktemp -d)"
+          printf 'SUME_API_BASE_URL=https://example.invalid\nSUME_API_KEY=sume_live_dotenv_check_000000000000\n' > "$dir/.env"
+          (cd "$dir" && "$OLDPWD/dist/bin/sume-linux-x64" agent --json) |
+            jq -e '.base_url == "https://api.sume.com" and .key.source == "dotenv"'
+          docker run --rm -v "$PWD/dist/bin:/b" alpine:3.22 \
+            sh -c 'apk add --no-cache libstdc++ libgcc >/dev/null && /b/sume-linux-x64-musl --version'
+          (cd dist/bin && sha256sum -c checksums.txt)
+      - name: Check the install scripts
+        run: |
+          shellcheck install.sh
+          # shellcheck disable=SC2016 # $errors is PowerShell's, not the shell's
+          pwsh -NoProfile -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors) { $errors; exit 1 }'

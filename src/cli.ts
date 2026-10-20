@@ -1,0 +1,396 @@
+import { ApiError } from "./api/errors.ts";
+import { agent, init } from "./commands/agent.ts";
+import { auth } from "./commands/auth.ts";
+import { complete } from "./commands/complete.ts";
+import { completionCommand } from "./commands/completion.ts";
+import { doctor } from "./commands/doctor.ts";
+import { estimate } from "./commands/estimate.ts";
+import { jobs } from "./commands/jobs.ts";
+import { models } from "./commands/models.ts";
+import { run } from "./commands/run.ts";
+import { renderInputs, schema, vendoredRouter } from "./commands/schema.ts";
+import { update } from "./commands/update.ts";
+import { upload } from "./commands/upload.ts";
+import { version, versionInfo } from "./commands/version.ts";
+import { createContext } from "./context.ts";
+import { type CommandSpec, findSubcommand, type Parsed, parse } from "./lib/args.ts";
+import { DEFAULT_BASE_URL, DOCS_URL, INSTALL, KEYS_URL, resolveSettings, WRONG_BASE_URL } from "./lib/config.ts";
+import { CliError, ExitCode, UsageError } from "./lib/errors.ts";
+import { expandFieldFlags } from "./lib/field-flags.ts";
+import { renderHelp } from "./lib/help.ts";
+import { colorEnabled, type Stream, Ui } from "./lib/ui.ts";
+import { VERSION } from "./version.ts";
+
+export const GLOBAL_FLAGS = [
+  { name: "json", type: "boolean", description: "Print one JSON document on stdout, for scripts and agents" },
+  {
+    name: "api-key",
+    type: "string",
+    placeholder: "<key>",
+    description: "Use this key (default: SUME_API_KEY, then the saved key)",
+  },
+  {
+    name: "base-url",
+    type: "string",
+    placeholder: "<url>",
+    description: `API host (default: SUME_API_BASE_URL, then ${DEFAULT_BASE_URL})`,
+  },
+  { name: "quiet", type: "boolean", description: "Print results only; no progress or notes" },
+  { name: "verbose", type: "boolean", description: "Print every API call with its status and request id" },
+  { name: "no-color", type: "boolean", description: "Plain text, no color (also: NO_COLOR=1)" },
+  { name: "help", short: "h", type: "boolean", description: "Show help" },
+  { name: "version", short: "v", type: "boolean", description: "Print the version" },
+] as const satisfies CommandSpec["flags"];
+
+/** Under the root help: the next step for someone with no key, and the agent page. */
+function startHere(env: NodeJS.ProcessEnv, cwd: string): string[] {
+  let hasKey = Boolean(env.SUME_API_KEY);
+  try {
+    hasKey ||= Boolean(resolveSettings({}, env, cwd).apiKey);
+  } catch {
+    // An unreadable config is doctor's business, not help's.
+  }
+  return [
+    "",
+    ...(hasKey ? [] : [`No key yet: a person makes one at ${KEYS_URL}; then export SUME_API_KEY or put it in ./.env.`]),
+    "Setting up an agent? `sume agent` prints the install, the API host and the key setup on one page.",
+  ];
+}
+
+const GLOBAL_VALUE_FLAGS = GLOBAL_FLAGS.filter((f) => f.type !== "boolean").map((f) => `--${f.name}`);
+
+/** `run` and `estimate` take any request field as a flag (`--seed 7`). */
+function fieldCommand(name: string) {
+  const command = [run, estimate].find((c) => c.name === name || c.aliases?.includes(name));
+  return command ? { name: command.name, flags: [...GLOBAL_FLAGS, ...(command.flags ?? [])] } : undefined;
+}
+
+/**
+ * `SUME_CLI_OUTPUT`: `json` makes every command print JSON, as if each had
+ * --json; `auto` does so when stdout is not a terminal; `text` (the
+ * default) never does. For agents whose harness cannot add a flag.
+ */
+function jsonFromEnv(env: NodeJS.ProcessEnv, stdout: Stream): boolean {
+  const mode = (env.SUME_CLI_OUTPUT ?? "").trim().toLowerCase();
+  if (mode === "" || mode === "text") return false;
+  if (mode === "json") return true;
+  if (mode === "auto") return !stdout.isTTY;
+  throw new UsageError(`SUME_CLI_OUTPUT must be json, auto or text (got "${env.SUME_CLI_OUTPUT}").`);
+}
+
+const help: CommandSpec = {
+  name: "help",
+  group: "Setup",
+  summary: "Show help for a command",
+  args: [{ name: "command", variadic: true, description: "The command, like `run` or `jobs wait`" }],
+  run: async () => ExitCode.Ok, // Handled in main, which knows the whole tree.
+};
+
+export const root: CommandSpec = {
+  name: "sume",
+  summary: "images and video from your terminal, on the Sume API",
+  description:
+    "Run any Sume API model, wait for the job, and get the file. Prices are in dollars and shown before you spend. " +
+    "Every command takes --json for scripts and agents.",
+  flags: GLOBAL_FLAGS,
+  commands: [
+    run,
+    estimate,
+    upload,
+    models,
+    schema,
+    jobs,
+    agent,
+    init,
+    auth,
+    doctor,
+    completionCommand(() => root),
+    update,
+    version,
+    help,
+    complete,
+  ],
+};
+
+export interface MainOptions {
+  argv: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  stdout?: Stream;
+  stderr?: Stream;
+  fetch?: typeof globalThis.fetch;
+  signal?: AbortSignal;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+/** Run the CLI and return its exit code. Never calls process.exit. */
+export async function main(options: MainOptions): Promise<number> {
+  const env = options.env ?? process.env;
+  const stdout = options.stdout ?? process.stdout;
+  const stderr = options.stderr ?? process.stderr;
+  let wantsJson = options.argv.includes("--json");
+  // Color only when both streams are terminals, so no escape code ever lands
+  // in a pipe or a file (results go to stdout, progress to stderr).
+  const color = (off: boolean) =>
+    colorEnabled(stderr, env, off ? false : undefined) && colorEnabled(stdout, env, off ? false : undefined);
+  // Before parsing succeeds, report errors the way the flags ask for.
+  let ui = new Ui({
+    stdout,
+    stderr,
+    color: color(options.argv.includes("--no-color")),
+    interactive: false,
+    quiet: false,
+    verbose: false,
+  });
+
+  let parsed: Parsed;
+  let envJson: boolean;
+  try {
+    envJson = jsonFromEnv(env, stdout);
+    wantsJson ||= envJson;
+    parsed = parse(root, expandFieldFlags(options.argv, fieldCommand, vendoredRouter, GLOBAL_VALUE_FLAGS));
+  } catch (error) {
+    return report(ui, error, wantsJson);
+  }
+  const flags = parsed.flags;
+  // A completion script is shell code, never JSON, whatever SUME_CLI_OUTPUT says.
+  const json = flags.json === true || (envJson && !["completion", "__complete"].includes(parsed.path[0] ?? ""));
+  const quiet = flags.quiet === true || json;
+  ui = new Ui({
+    stdout,
+    stderr,
+    color: color(flags["no-color"] === true),
+    interactive: !quiet && Boolean(stderr.isTTY) && env.CI === undefined,
+    quiet,
+    verbose: flags.verbose === true,
+  });
+
+  try {
+    if (flags.version === true && parsed.path.length === 0) {
+      const info = versionInfo();
+      if (json) ui.json(info);
+      else ui.out(`sume ${VERSION}`);
+      return ExitCode.Ok;
+    }
+    if (parsed.command === help || flags.help === true || (parsed.command === root && parsed.args.length === 0)) {
+      const chain = parsed.command === help ? chainFor(parsed.args) : chainFor(parsed.path);
+      if (json) ui.json(manifest(chain[chain.length - 1] === root ? undefined : chain));
+      else ui.out(renderHelp(chain, ui.c, ui.width).trimEnd());
+      if (!json && chain.length === 1)
+        for (const line of startHere(env, options.cwd ?? process.cwd())) ui.out(ui.c.dim(line));
+      // `run <model> --help` also shows what that model takes, like `sume schema <model>`.
+      const modelId = parsed.command !== help ? parsed.args[0] : undefined;
+      const router =
+        modelId && (parsed.command === run || parsed.command === estimate) ? vendoredRouter(modelId) : undefined;
+      if (!json && modelId && router) {
+        ui.out("");
+        for (const line of renderInputs(modelId, router, ui.c, ui.width)) ui.out(line);
+      }
+      return ExitCode.Ok;
+    }
+    if (!parsed.command.run) {
+      // A command group with no subcommand (`sume jobs`) shows its help.
+      const chain = chainFor(parsed.path);
+      if (json) ui.json(manifest(chain));
+      else ui.out(renderHelp(chain, ui.c, ui.width).trimEnd());
+      return ExitCode.Ok;
+    }
+
+    const settings = resolveSettings(
+      { apiKey: flags["api-key"] as string | undefined, baseUrl: flags["base-url"] as string | undefined },
+      env,
+      options.cwd ?? process.cwd(),
+    );
+    const controller = new AbortController();
+    // Ctrl-C, and the SIGTERM a harness or `timeout` sends, end the command the
+    // same way: the job keeps running, and the error (JSON with --json) names
+    // it, so nobody resubmits and pays twice.
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const quitNow = () => {
+      ui.stopSpinner();
+      process.exit(ExitCode.Interrupted);
+    };
+    const onSignal = () => {
+      for (const name of signals) process.removeListener(name, onSignal);
+      controller.abort(Object.assign(new Error("Interrupted."), { name: "AbortError" }));
+      // A second signal quits at once, with the terminal's cursor restored.
+      for (const name of signals) process.once(name, quitNow);
+    };
+    if (!options.signal) for (const name of signals) process.once(name, onSignal);
+    options.signal?.addEventListener("abort", () => controller.abort(options.signal?.reason), { once: true });
+    const ctx = createContext({
+      ui,
+      json,
+      settings,
+      cwd: options.cwd ?? process.cwd(),
+      env,
+      signal: controller.signal,
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.sleep ? { sleep: options.sleep } : {}),
+    });
+    try {
+      return (await parsed.command.run(parsed, ctx)) ?? ExitCode.Ok;
+    } catch (error) {
+      if (controller.signal.aborted) return interrupted(ui, json, ctx);
+      return report(ui, error, json, ctx);
+    } finally {
+      for (const name of signals) {
+        process.removeListener(name, onSignal);
+        process.removeListener(name, quitNow);
+      }
+    }
+  } catch (error) {
+    return report(ui, error, json);
+  } finally {
+    ui.stopSpinner();
+  }
+}
+
+/** What an error after a submit must still tell the person: how to get the job back. */
+interface JobContext {
+  jobId?: string | undefined;
+  idempotencyKey?: string | undefined;
+}
+
+function jobFields(job: JobContext | undefined): Record<string, string> {
+  if (job?.jobId) return { job_id: job.jobId };
+  if (job?.idempotencyKey) return { idempotency_key: job.idempotencyKey };
+  return {};
+}
+
+function jobHint(job: JobContext | undefined): string | undefined {
+  if (job?.jobId) return `Job ${job.jobId} was created. Check on it with: sume jobs wait ${job.jobId}`;
+  if (job?.idempotencyKey) {
+    return `If the submit went through, rerun with --idempotency-key ${job.idempotencyKey} to get that job back instead of paying again.`;
+  }
+  return undefined;
+}
+
+function chainFor(names: readonly string[]): CommandSpec[] {
+  const chain: CommandSpec[] = [root];
+  for (const name of names) {
+    const next = findSubcommand(chain[chain.length - 1] as CommandSpec, name);
+    if (!next) throw new UsageError(`No command "${names.join(" ")}".`, "Run `sume --help` to see the commands.");
+    chain.push(next);
+  }
+  return chain;
+}
+
+function interrupted(ui: Ui, json: boolean, job: JobContext): number {
+  ui.stopSpinner();
+  if (json) {
+    const hint = job.jobId ? `Pick it up with: sume jobs wait ${job.jobId}` : jobHint(job);
+    ui.json({ error: { code: "interrupted", message: "Interrupted.", ...(hint ? { hint } : {}), ...jobFields(job) } });
+  } else if (job.jobId) {
+    ui.error(
+      `Stopped waiting. Job ${job.jobId} keeps running on Sume.`,
+      `Pick it up with: sume jobs wait ${job.jobId}`,
+    );
+  } else {
+    ui.error("Interrupted.", jobHint(job));
+  }
+  return ExitCode.Interrupted;
+}
+
+/** Print an error the way the output mode asks for, and pick the exit code. */
+function report(ui: Ui, error: unknown, json: boolean, context?: JobContext): number {
+  ui.stopSpinner();
+  // A 4xx is a definite refusal: nothing was created, so there is no job to
+  // get back and no point naming the idempotency key. Network errors and
+  // 5xx leave the outcome open, and those are when the key matters.
+  const refused = error instanceof ApiError && error.status < 500;
+  const job = refused && !context?.jobId ? undefined : context;
+  if (error instanceof CliError) {
+    const lines = error instanceof ApiError ? error.fieldErrors() : [];
+    if (json) {
+      ui.json({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.hint ? { hint: error.hint } : {}),
+          ...(error instanceof ApiError
+            ? {
+                status: error.status,
+                request_id: error.requestId ?? null,
+                retryable: error.retryable,
+                ...(error.details !== undefined ? { details: error.details } : {}),
+              }
+            : {}),
+          ...jobFields(job),
+        },
+      });
+    } else {
+      const detail = lines.length ? `\n${lines.map((l) => `  • ${l}`).join("\n")}` : "";
+      const requestId = error instanceof ApiError && error.requestId ? ` (request ${error.requestId})` : "";
+      // Skip the job line when the error's own hint already names the job.
+      const extra = job?.jobId && error.hint?.includes(job.jobId) ? undefined : jobHint(job);
+      ui.error(`${error.message}${requestId}${detail}`, [error.hint, extra].filter(Boolean).join("\n  "));
+    }
+    return error.exitCode;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (json) ui.json({ error: { code: "internal_error", message, ...jobFields(job) } });
+  else {
+    ui.error(
+      `Unexpected error: ${message}`,
+      [jobHint(job), "Please report it: https://github.com/sumelabs/cli/issues"].filter(Boolean).join("\n  "),
+    );
+    if (error instanceof Error && error.stack && ui.options.verbose) ui.debug(error.stack);
+  }
+  return ExitCode.Error;
+}
+
+/** `--help --json`: the command tree, generated from the same specs as help. */
+export function manifest(chain?: readonly CommandSpec[]) {
+  const describe = (command: CommandSpec, path: string[]): unknown => ({
+    command: ["sume", ...path].join(" "),
+    summary: command.summary,
+    ...(command.description ? { description: command.description } : {}),
+    ...(command.aliases?.length ? { aliases: command.aliases } : {}),
+    args: (command.args ?? []).map((a) => ({
+      name: a.name,
+      required: a.required ?? false,
+      variadic: a.variadic ?? false,
+      description: a.description,
+    })),
+    flags: (command.flags ?? [])
+      .filter((f) => !f.hidden)
+      .map((f) => ({
+        name: `--${f.name}`,
+        ...(f.short ? { short: `-${f.short}` } : {}),
+        type: f.type,
+        ...(f.multiple ? { repeatable: true } : {}),
+        ...(f.choices ? { choices: f.choices } : {}),
+        description: f.description,
+      })),
+    ...(command.examples?.length ? { examples: command.examples.filter((e) => !e.startsWith("#")) } : {}),
+    ...(command.commands?.length
+      ? { commands: command.commands.filter((c) => !c.hidden).map((c) => describe(c, [...path, c.name])) }
+      : {}),
+  });
+  if (chain && chain.length > 1) {
+    return describe(
+      chain[chain.length - 1] as CommandSpec,
+      chain.slice(1).map((c) => c.name),
+    );
+  }
+  return {
+    name: "sume",
+    version: VERSION,
+    description: root.summary,
+    install: INSTALL,
+    api: { default_base_url: DEFAULT_BASE_URL, wrong_base_url: WRONG_BASE_URL, docs: DOCS_URL, keys: KEYS_URL },
+    env: {
+      SUME_API_KEY: `API key, made at ${KEYS_URL}; also read from ./.env. Sent as Authorization: Bearer.`,
+      SUME_API_BASE_URL: `API host, default ${DEFAULT_BASE_URL} (never ${WRONG_BASE_URL})`,
+      SUME_CLI_OUTPUT:
+        "json: every command prints JSON, as with --json; auto: when stdout is not a terminal; text (default)",
+      SUME_CLI_MAX_USD: "Default --max-usd for every run: nothing over it is submitted",
+      SUME_CLI_CONFIG_DIR: "Where the saved key lives",
+      NO_COLOR: "Disable color",
+    },
+    exit_codes: Object.fromEntries(Object.entries(ExitCode).map(([name, code]) => [code, name])),
+    global_flags: (root.flags ?? []).map((f) => ({ name: `--${f.name}`, type: f.type, description: f.description })),
+    commands: (root.commands ?? []).filter((c) => !c.hidden).map((c) => describe(c, [c.name])),
+  };
+}

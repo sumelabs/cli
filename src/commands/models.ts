@@ -1,0 +1,297 @@
+import type { CatalogModel } from "../api/types.ts";
+import type { Context } from "../context.ts";
+import { type CommandSpec, closest, type Parsed } from "../lib/args.ts";
+import { ExitCode } from "../lib/errors.ts";
+import { formatUsd, wrap } from "../lib/ui.ts";
+
+const KINDS = ["image", "video", "lipsync", "captions"] as const;
+
+export const models: CommandSpec = {
+  name: "models",
+  aliases: ["model", "ls"],
+  group: "Models and jobs",
+  summary: "List the models and their prices, or show one",
+  description:
+    "Lists every model the Sume API serves, with its starting price in dollars. " +
+    "Give an exact model id to see its inputs, price options and limits; give any other word to filter the list. No key needed.",
+  args: [{ name: "query", complete: "models", description: "A model id for its details, or text to filter by" }],
+  flags: [
+    { name: "kind", short: "k", type: "string", choices: KINDS, description: "Only this kind of model" },
+    {
+      name: "company",
+      short: "c",
+      type: "string",
+      placeholder: "<slug>",
+      description: "Only models from this company, like openai",
+    },
+    {
+      name: "brief",
+      short: "b",
+      type: "boolean",
+      description:
+        "One line per model: price per image or second, inputs, limits; cheapest first. With --json, a small list instead of the whole catalog",
+    },
+  ],
+  examples: [
+    "sume models",
+    "sume models --kind video",
+    "sume models seedance",
+    "sume models gpt-image-2",
+    "sume models --brief --json    # what an agent needs to pick a model, in a few KB",
+  ],
+  run: modelsCommand,
+};
+
+async function modelsCommand(parsed: Parsed, ctx: Context): Promise<number> {
+  const { ui } = ctx;
+  const query = parsed.args[0]?.trim();
+  const kind = parsed.flags.kind as string | undefined;
+  const company = (parsed.flags.company as string | undefined)?.toLowerCase();
+
+  ui.spin("Loading models");
+  const all = await ctx.client().listModels(ctx.signal);
+  ui.stopSpinner();
+
+  const exact = query ? all.find((m) => m.id === query || m.slug === query) : undefined;
+  if (exact) {
+    if (ctx.json) ui.json(exact);
+    else renderModel(ctx, exact);
+    return ExitCode.Ok;
+  }
+
+  const needle = query?.toLowerCase();
+  const list = all.filter(
+    (m) =>
+      (!kind || m.kind === kind) &&
+      (!company || m.company.slug.toLowerCase() === company || m.company.name.toLowerCase() === company) &&
+      (!needle ||
+        [m.id, m.name, m.company.name, m.company.slug, m.kind, ...(m.modes ?? [])].some((v) =>
+          v.toLowerCase().includes(needle),
+        )),
+  );
+
+  if (parsed.flags.brief === true) {
+    const rows = briefModels(list);
+    if (ctx.json) ui.json(rows);
+    else {
+      ui.table(
+        ["MODEL", "KIND", "PRICE", "INPUTS", "LIMITS"],
+        rows.map((r) => [ui.c.bold(r.id), r.kind, briefPrice(r), r.inputs.join(", "), briefLimits(r)]),
+      );
+      ui.info(ui.c.dim(`\n${rows.length} models, cheapest first in each kind. Inputs: sume schema <id>`));
+    }
+    return ExitCode.Ok;
+  }
+  if (ctx.json) {
+    ui.json(list);
+    return ExitCode.Ok;
+  }
+  if (list.length === 0) {
+    const guess = query
+      ? closest(
+          query,
+          all.map((m) => m.id),
+        )
+      : undefined;
+    ui.error(
+      `No models match${query ? ` "${query}"` : ""}${kind ? ` (kind ${kind})` : ""}${company ? ` (company ${company})` : ""}.`,
+      guess ? `Did you mean ${guess}?` : "Run `sume models` to see them all.",
+    );
+    return ExitCode.Ok;
+  }
+  const { c } = ui;
+  ui.table(
+    ["MODEL", "KIND", "COMPANY", "FROM", "INPUTS"],
+    list.map((m) => [c.bold(m.id), m.kind, m.company.name, fromPrice(m), inputs(m)]),
+  );
+  ui.info(c.dim(`\n${list.length} model${list.length === 1 ? "" : "s"}. Details: sume models <id>`));
+  return ExitCode.Ok;
+}
+
+const UNIT: Record<string, string> = { second: "/s", image: "/image", request: "/request" };
+
+/** What an agent needs to choose a model, without the whole catalog entry. */
+export interface BriefModel {
+  id: string;
+  kind: string;
+  /** Dollars per `per`, the cheapest option. */
+  usd_from: string;
+  /** Dollars per `per`, the dearest option, when it differs. */
+  usd_to?: string;
+  /** `image` or `second`. */
+  per: string;
+  inputs: string[];
+  seconds?: { min: number; max: number };
+  resolutions?: string[];
+}
+
+/** One `BriefModel` per model, by kind (image, video, lipsync, captions), cheapest first. */
+export function briefModels(list: readonly CatalogModel[]): BriefModel[] {
+  const kindOrder = (kind: string) => {
+    const index = (KINDS as readonly string[]).indexOf(kind);
+    return index === -1 ? KINDS.length : index;
+  };
+  return [...list]
+    .sort((a, b) => kindOrder(a.kind) - kindOrder(b.kind) || a.pricing.from_usd_micros - b.pricing.from_usd_micros)
+    .map((m) => {
+      const caps = (m.capabilities ?? {}) as Record<string, unknown>;
+      const seconds = caps.duration_seconds as { min?: unknown; max?: unknown } | undefined;
+      const resolutions = Array.isArray(caps.resolutions) ? (caps.resolutions as string[]) : [];
+      const to = m.pricing.to_usd;
+      return {
+        id: m.id,
+        kind: m.kind,
+        usd_from: m.pricing.from_usd,
+        ...(to && to !== m.pricing.from_usd ? { usd_to: to } : {}),
+        per: m.pricing.unit,
+        inputs: inputs(m).split(", ").filter(Boolean),
+        ...(typeof seconds?.min === "number" && typeof seconds.max === "number"
+          ? { seconds: { min: seconds.min, max: seconds.max } }
+          : {}),
+        ...(resolutions.length ? { resolutions } : {}),
+      };
+    });
+}
+
+export function briefPrice(r: BriefModel): string {
+  const unit = UNIT[r.per] ?? `/${r.per}`;
+  return `${formatUsd(r.usd_from)}${r.usd_to ? `–${formatUsd(r.usd_to)}` : ""}${unit}`;
+}
+
+export function briefLimits(r: BriefModel): string {
+  const parts: string[] = [];
+  if (r.resolutions?.length)
+    parts.push(r.resolutions.length > 2 ? `${r.resolutions[0]}–${r.resolutions.at(-1)}` : r.resolutions.join(", "));
+  if (r.seconds) parts.push(`${r.seconds.min}–${r.seconds.max} s`);
+  return parts.join(" · ");
+}
+
+/** `text-to-video, image-to-video` → `text, image`: what a model starts from. */
+export function inputs(m: Pick<CatalogModel, "modes">): string {
+  const words = (m.modes ?? []).map((mode) => {
+    if (mode === "image-edit") return "image";
+    if (mode === "video-captions") return "video";
+    return mode.split("-to-")[0] ?? mode;
+  });
+  return [...new Set(words)].join(", ");
+}
+
+function fromPrice(m: CatalogModel): string {
+  return `${formatUsd(m.pricing.from_usd)}${UNIT[m.pricing.unit] ?? `/${m.pricing.unit}`}`;
+}
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  text_to_image: "text to image",
+  image_edit: "image edit",
+  text_to_video: "text to video",
+  image_to_video: "image to video",
+  end_frame: "end frame",
+  reference_images: "reference images",
+  reference_videos: "reference videos",
+  reference_audios: "reference audio",
+  video_to_video: "video to video",
+  audio: "audio",
+  lipsync: "lip-sync",
+  captions: "captions",
+};
+
+const RANGE_UNITS: Record<string, string> = { duration_seconds: " s" };
+const FIELD_LABELS: Record<string, string> = {
+  duration_seconds: "Duration",
+  duration_values: "Durations",
+  aspect_ratios: "Aspect ratios",
+  max_images: "Max images",
+  output_formats: "Formats",
+};
+
+function renderModel(ctx: Context, m: CatalogModel): void {
+  const { ui } = ctx;
+  const { c } = ui;
+  const width = Math.min(ui.width, 100);
+  const rows: [string, string][] = [];
+  const caps = m.capabilities ?? {};
+  const unit = m.pricing.unit === "second" ? "/s" : `/${m.pricing.unit}`;
+
+  rows.push(["Kind", m.kind]);
+  if (m.modes?.length) rows.push(["Modes", m.modes.join(", ")]);
+  rows.push(["Price", `${m.pricing.qualifier === "from" ? "from " : ""}${formatUsd(m.pricing.from_usd)}${unit}`]);
+  const supports = Object.entries(caps)
+    .filter(([, v]) => v === true)
+    .map(([k]) => CAPABILITY_LABELS[k] ?? k.replaceAll("_", " "));
+  if (supports.length) rows.push(["Takes", supports.join(", ")]);
+  for (const [key, value] of Object.entries(caps)) {
+    if (typeof value === "boolean") continue;
+    const label = FIELD_LABELS[key] ?? key.replaceAll("_", " ").replace(/^./u, (ch) => ch.toUpperCase());
+    if (Array.isArray(value)) {
+      if (value.length) rows.push([label, value.join(", ")]);
+    } else if (value && typeof value === "object" && "min" in value && "max" in value) {
+      const range = value as { min: number; max: number };
+      rows.push([label, `${range.min}–${range.max}${RANGE_UNITS[key] ?? ""}`]);
+    } else if (value !== null && value !== undefined) {
+      rows.push([label, String(value)]);
+    }
+  }
+
+  const labelWidth = Math.max(...rows.map(([label]) => label.length)) + 2;
+  ui.out(`${c.bold(m.id)} ${c.dim("—")} ${m.name} ${c.dim(`(${m.company.name})`)}`);
+  if (m.description) for (const line of wrap(m.description, width)) ui.out(c.dim(line));
+  ui.out();
+  for (const [label, value] of rows) {
+    const [first, ...rest] = wrap(value, width - labelWidth);
+    ui.out(`${c.dim(label.padEnd(labelWidth))}${first ?? ""}`);
+    for (const line of rest) ui.out(`${" ".repeat(labelWidth)}${line}`);
+    if (label === "Price") {
+      const options = m.pricing.options ?? [];
+      if (options.length > 1) {
+        const optionWidth = Math.max(...options.map((o) => o.label.length));
+        for (const o of options) {
+          ui.out(`${" ".repeat(labelWidth)}${c.dim(o.label.padEnd(optionWidth))}  ${formatUsd(o.usd)}${unit}`);
+        }
+      }
+    }
+  }
+
+  if (m.constraints?.length) {
+    ui.out();
+    ui.out(c.bold("Notes"));
+    for (const note of m.constraints) {
+      const [first, ...rest] = wrap(note, width - 4);
+      ui.out(`  ${c.dim("•")} ${first ?? ""}`);
+      for (const line of rest) ui.out(`    ${line}`);
+    }
+  }
+
+  ui.out();
+  ui.out(c.bold("Try it"));
+  ui.out(`  ${c.dim("$")} ${example(m)}`);
+}
+
+function example(m: CatalogModel): string {
+  const caps = (m.capabilities ?? {}) as Record<string, unknown>;
+  switch (m.kind) {
+    case "image": {
+      const qualities = caps.qualities as string[] | undefined;
+      const low = qualities?.includes("low") ? " -q low" : "";
+      return caps.text_to_image === false
+        ? `sume run ${m.id} "what to change" --image ./photo.png`
+        : `sume run ${m.id} "a ceramic cup on a wooden table"${low}`;
+    }
+    case "lipsync":
+      return caps.video_to_video
+        ? `sume run ${m.id} --video ./face.mp4 --audio ./speech.wav -d 6`
+        : `sume run ${m.id} --image ./face.png --audio ./speech.wav -d 6`;
+    case "captions":
+      return `sume run ${m.id} --video ./clip.mp4 -d 12 --set captions.style=simple`;
+    default: {
+      const range = caps.duration_seconds as { min?: number } | undefined;
+      const resolutions = caps.resolutions as string[] | undefined;
+      const duration = range?.min ? ` -d ${Math.max(range.min, 4)}` : "";
+      const resolution = resolutions?.length ? ` -r ${resolutions[0]}` : "";
+      if (caps.text_to_video === false && caps.image_to_video) {
+        return `sume run ${m.id} "slow push in" --image ./first-frame.png${duration}${resolution}`;
+      }
+      if (caps.text_to_video === false) return `sume models ${m.id}  # see Notes for its inputs`;
+      return `sume run ${m.id} "a paper boat drifting down a rain gutter"${duration}${resolution}`;
+    }
+  }
+}

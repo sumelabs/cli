@@ -1,0 +1,223 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish. Run it by hand with dry_run to build and
+# smoke every binary without publishing anything.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build, without the v (must equal package.json)
+        required: true
+      dry_run:
+        description: Build and smoke only; publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - id: version
+        name: Version matches package.json
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          package=$(node -p "require('./package.json').version")
+          if [ "$version" != "$package" ]; then
+            echo "::error::Release version $version does not match package.json $package"
+            exit 1
+          fi
+          grep -q "## \[$version\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$version] section"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm run check
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-24.04 }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm }
+          - { target: linux-x64-musl, runner: ubuntu-24.04 }
+          - { target: linux-arm64-musl, runner: ubuntu-24.04-arm }
+          - { target: darwin-x64, runner: macos-15-intel }
+          - { target: darwin-arm64, runner: macos-latest }
+          - { target: windows-x64, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: node scripts/build-binaries.mjs ${{ matrix.target }}
+      - name: Smoke the binary on its own platform
+        shell: bash
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          bin=dist/bin/sume-${{ matrix.target }}
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          case "$bin" in
+            *-musl)
+              # Bun's musl runtime links libstdc++ and libgcc, which Alpine does not ship by default.
+              run() { docker run --rm -v "$PWD/dist/bin:/b" alpine:3.22 sh -c 'apk add --no-cache libstdc++ libgcc >/dev/null && exec "$0" "$@"' "/b/${bin##*/}" "$@"; } ;;
+            *) run() { "$bin" "$@"; } ;;
+          esac
+          test "$(run --version)" = "sume $VERSION"
+          run --help > /dev/null
+          # A project's .env must never pick the API host (Bun loads .env into a binary's environment by default).
+          if [[ "$bin" != *-musl ]]; then
+            dir="$(mktemp -d)"
+            printf 'SUME_API_BASE_URL=https://example.invalid\nSUME_API_KEY=sume_live_dotenv_check_000000000000\n' > "$dir/.env"
+            (cd "$dir" && "$OLDPWD/$bin" agent --json) |
+              jq -e '.base_url == "https://api.sume.com" and .key.source == "dotenv"'
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sume-${{ matrix.target }}
+          path: dist/bin/sume-${{ matrix.target }}*
+          if-no-files-found: error
+
+  pack:
+    name: npm package
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pack, plus a copy under a stable name for releases/latest/download/sume.tgz
+        run: |
+          npm pack
+          cp sume-*.tgz sume.tgz
+      - name: Smoke a global install of the package
+        run: |
+          npm install -g --prefix "$RUNNER_TEMP/npm" ./sume.tgz
+          "$RUNNER_TEMP/npm/bin/sume" --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-package
+          path: sume*.tgz
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+    needs: [check, build, pack]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: assets
+        run: |
+          sha256sum sume* > checksums.txt
+          cat checksums.txt
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/sume*
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          cat notes.md
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: v${{ needs.check.outputs.version }}
+          name: v${{ needs.check.outputs.version }}
+          body_path: notes.md
+          prerelease: ${{ contains(needs.check.outputs.version, '-') }}
+          files: assets/*
+
+  verify:
+    name: Verify install
+    needs: [check, release]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install.sh
+        if: runner.os != 'Windows'
+        env:
+          SUME_CLI_VERSION: ${{ needs.check.outputs.version }}
+          SUME_CLI_NO_MODIFY_PATH: "1"
+        run: |
+          sh install.sh
+          test "$("$HOME/.sume/bin/sume" --version)" = "sume $SUME_CLI_VERSION"
+      - name: install.sh, then sume in the same shell (~/.local/bin on PATH, as agents have)
+        if: runner.os != 'Windows'
+        env:
+          SUME_CLI_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          sh install.sh
+          test "$(sume --version)" = "sume $SUME_CLI_VERSION"
+      - name: install.ps1 (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SUME_CLI_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          Get-Content -Raw ./install.ps1 | Invoke-Expression
+          $out = & "$env:LOCALAPPDATA\sume\bin\sume.exe" --version
+          if ($out -ne "sume $env:SUME_CLI_VERSION") { throw "got: $out" }
+      - name: install.ps1 again (Windows PowerShell 5.1, over the existing install)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          SUME_CLI_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          Get-Content -Raw ./install.ps1 | Invoke-Expression
+          $out = & "$env:LOCALAPPDATA\sume\bin\sume.exe" --version
+          if ($out -ne "sume $env:SUME_CLI_VERSION") { throw "got: $out" }
+          $raw = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if (-not (($raw -split ';') -contains "$env:LOCALAPPDATA\sume\bin")) { throw "PATH was not updated: $raw" }
+      - name: install.sh on Alpine (musl)
+        if: runner.os == 'Linux'
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          docker run --rm -v "$PWD:/w" -e SUME_CLI_VERSION="$VERSION" -e SUME_CLI_NO_MODIFY_PATH=1 alpine:3.22 \
+            sh -c 'apk add --no-cache curl libstdc++ libgcc >/dev/null && sh /w/install.sh && test "$("$HOME/.sume/bin/sume" --version)" = "sume $SUME_CLI_VERSION"'
+      - name: npm install from the release
+        if: runner.os == 'Linux'
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          npm install -g --prefix "$RUNNER_TEMP/npm" "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$VERSION/sume.tgz"
+          test "$("$RUNNER_TEMP/npm/bin/sume" --version)" = "sume $VERSION"

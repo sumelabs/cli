@@ -1,0 +1,257 @@
+import type { Job } from "../api/types.ts";
+import type { Context } from "../context.ts";
+import type { CommandSpec } from "../lib/args.ts";
+import { checkWritable } from "../lib/download.ts";
+import { ExitCode } from "../lib/errors.ts";
+import { formatAge, formatDuration } from "../lib/ui.ts";
+import { eventLines, eventTail, followJob, jobRow, resolveJobId, timeoutFlag, WAIT_FLAGS } from "./shared.ts";
+
+const STATES = ["queued", "processing", "completed", "failed", "canceled"] as const;
+const jobArg = [{ name: "id", required: true, description: "The job id (job_…), or a unique start of it" }] as const;
+
+const list: CommandSpec = {
+  name: "list",
+  aliases: ["ls"],
+  summary: "List your workspace's jobs, newest first",
+  flags: [
+    {
+      name: "limit",
+      short: "l",
+      type: "number",
+      min: 1,
+      max: 100,
+      integer: true,
+      placeholder: "<n>",
+      description: "How many, 1–100 (default 20)",
+    },
+    { name: "status", short: "s", type: "string", choices: STATES, description: "Only jobs in this state" },
+    { name: "type", type: "string", placeholder: "<type>", description: "Only this job type, like image_generation" },
+    {
+      name: "after",
+      type: "string",
+      placeholder: "<cursor>",
+      description: "The next page, from the cursor the last page printed",
+    },
+  ],
+  examples: ["sume jobs list", "sume jobs list --status processing", "sume jobs list --json | jq -r '.jobs[].id'"],
+  run: async (parsed, ctx) => {
+    const { ui } = ctx;
+    const limit = (parsed.flags.limit as number | undefined) ?? 20;
+    ui.spin("Loading jobs");
+    const page = await ctx.client().listJobs(
+      {
+        limit,
+        ...(parsed.flags.status ? { status: parsed.flags.status as string } : {}),
+        ...(parsed.flags.type ? { type: parsed.flags.type as string } : {}),
+        ...(parsed.flags.after ? { starting_after: parsed.flags.after as string } : {}),
+      },
+      ctx.signal,
+    );
+    ui.stopSpinner();
+    if (ctx.json) {
+      ui.json({ jobs: page.jobs.map(jobRow), next_cursor: page.next_cursor ?? null });
+      return ExitCode.Ok;
+    }
+    if (page.jobs.length === 0) {
+      ui.info("No jobs.");
+      return ExitCode.Ok;
+    }
+    const { c } = ui;
+    ui.table(
+      ["JOB", "MODEL", "STATUS", "CREATED", "TOOK"],
+      page.jobs.map((job) => [
+        job.id,
+        job.model ?? c.dim("—"),
+        paintState(ctx, job.status),
+        formatAge(job.created_at),
+        took(job),
+      ]),
+    );
+    if (page.next_cursor) ui.info(c.dim(`\nMore: sume jobs list --after ${page.next_cursor}`));
+    return ExitCode.Ok;
+  },
+};
+
+const get: CommandSpec = {
+  name: "get",
+  aliases: ["show"],
+  summary: "Show a job: its input, state, timing, error and files",
+  args: jobArg,
+  run: async (parsed, ctx) => {
+    const { ui } = ctx;
+    const job = await ctx.client().getJob(await resolveJobId(ctx, parsed.args[0] as string), ctx.signal);
+    if (ctx.json) {
+      ui.json(job);
+      return ExitCode.Ok;
+    }
+    const { c } = ui;
+    const field = (label: string, value: string) => ui.out(`${c.dim(label.padEnd(11))}${value}`);
+    field("Job", c.bold(job.id));
+    field("Model", job.model ?? "—");
+    field("Type", job.type);
+    field("Status", paintState(ctx, job.status));
+    field("Created", `${job.created_at} (${formatAge(job.created_at)})`);
+    if (job.completed_at) field("Took", took(job));
+    if (job.input && Object.keys(job.input).length) {
+      ui.out(c.dim("Input"));
+      for (const [key, value] of Object.entries(job.input)) {
+        ui.out(`  ${c.dim(`${key}:`)} ${typeof value === "string" ? value : JSON.stringify(value)}`);
+      }
+    }
+    if (job.error) field("Error", c.red(job.error.message ?? job.error.code ?? "failed"));
+    for (const artifact of job.result?.artifacts ?? [])
+      field("File", `${artifact.url} ${c.dim(artifact.content_type)}`);
+    return ExitCode.Ok;
+  },
+};
+
+const status: CommandSpec = {
+  name: "status",
+  summary: "Read a job's status once",
+  args: jobArg,
+  run: async (parsed, ctx) => {
+    const { ui } = ctx;
+    const { data } = await ctx.client().getStatus(await resolveJobId(ctx, parsed.args[0] as string), ctx.signal);
+    if (ctx.json) {
+      ui.json(data);
+      return ExitCode.Ok;
+    }
+    const position =
+      data.queue_position !== null && data.queue_position !== undefined ? ` (#${data.queue_position} in queue)` : "";
+    ui.out(`${data.job_id}  ${paintState(ctx, data.sume_status)}${position}`);
+    const next: Record<string, string> = {
+      poll_status: `Wait for it: sume jobs wait ${data.job_id}`,
+      fetch_result: `Save the files: sume jobs wait ${data.job_id}`,
+      inspect_events: `See why: sume jobs events ${data.job_id}`,
+    };
+    ui.info(ui.c.dim(next[data.next_action] ?? ""));
+    return ExitCode.Ok;
+  },
+};
+
+const wait: CommandSpec = {
+  name: "wait",
+  aliases: ["download"],
+  summary: "Wait for a job to finish and save its files",
+  description:
+    "Picks up a job from `sume run --no-wait`, an interrupted run, or another machine, and saves its files like `sume run` does.",
+  args: jobArg,
+  flags: WAIT_FLAGS,
+  examples: ["sume jobs wait job_7513b52d-3669-4ffe-b317-8b02000715eb -o ./out/"],
+  run: async (parsed, ctx) => {
+    const timeoutMs = timeoutFlag(parsed.flags as Record<string, unknown>);
+    if (parsed.flags["no-download"] !== true) await checkWritable(parsed.flags.output as string | undefined, ctx.cwd);
+    const id = await resolveJobId(ctx, parsed.args[0] as string);
+    const job = await ctx.client().getJob(id, ctx.signal);
+    return followJob(ctx, {
+      jobId: job.id,
+      model: job.model,
+      startedAt: Date.parse(job.created_at) || Date.now(),
+      timeoutMs,
+      firstDelaySeconds: 0,
+      jobTime: true,
+      flags: parsed.flags as Record<string, unknown>,
+    });
+  },
+};
+
+const cancel: CommandSpec = {
+  name: "cancel",
+  summary: "Cancel a job that has not started generating",
+  description:
+    "Only a job still waiting for the model can be canceled; its price is refunded. Most jobs start within a second.",
+  args: jobArg,
+  run: async (parsed, ctx) => {
+    const { ui } = ctx;
+    const res = await ctx.client().cancelJob(await resolveJobId(ctx, parsed.args[0] as string), ctx.signal);
+    if (ctx.json) ui.json(res);
+    else ui.success(`Canceled ${res.job_id}`);
+    return ExitCode.Ok;
+  },
+};
+
+const events: CommandSpec = {
+  name: "events",
+  aliases: ["logs"],
+  summary: "Show a job's lifecycle events, including why it failed",
+  description: "With --follow, keeps printing new events until the job ends, like tail -f.",
+  args: jobArg,
+  flags: [
+    {
+      name: "limit",
+      short: "l",
+      type: "number",
+      min: 1,
+      max: 100,
+      integer: true,
+      placeholder: "<n>",
+      description: "How many events, 1–100",
+    },
+    { name: "follow", short: "f", type: "boolean", description: "Keep printing new events until the job ends" },
+  ],
+  examples: ["sume jobs events job_7513b52d", "sume jobs logs 7513b52d --follow"],
+  run: async (parsed, ctx) => {
+    const { ui } = ctx;
+    const id = await resolveJobId(ctx, parsed.args[0] as string);
+    if (parsed.flags.follow === true) {
+      ctx.jobId = id;
+      const tail = eventTail(ctx, id);
+      for (;;) {
+        const fresh = await tail.pull();
+        for (const event of fresh) {
+          if (ctx.json) ui.out(JSON.stringify(event));
+          else for (const line of eventLines(ctx, event, tail.firstAt)) ui.out(line);
+        }
+        const { data } = await ctx.client().getStatus(id, ctx.signal);
+        if (data.terminal) {
+          for (const event of await tail.pull()) {
+            if (ctx.json) ui.out(JSON.stringify(event));
+            else for (const line of eventLines(ctx, event, tail.firstAt)) ui.out(line);
+          }
+          return ExitCode.Ok;
+        }
+        await ctx.sleep(Math.min(Math.max((data.next_poll_after_seconds ?? 2) * 1000, 1000), 5000), ctx.signal);
+      }
+    }
+    const res = await ctx.client().listEvents(id, parsed.flags.limit as number | undefined, ctx.signal);
+    if (ctx.json) {
+      ui.json(res);
+      return ExitCode.Ok;
+    }
+    const first = res.events[0] ? Date.parse(res.events[0].created_at) : 0;
+    for (const event of res.events) for (const line of eventLines(ctx, event, first)) ui.out(line);
+    // The API's job.failed event does not always carry the reason; the job does.
+    const last = res.events[res.events.length - 1];
+    if (last && /^job\.(failed|canceled)$/u.test(last.type) && !(last.data as { error?: unknown } | undefined)?.error) {
+      const job = await ctx
+        .client()
+        .getJob(id, ctx.signal)
+        .catch(() => undefined);
+      if (job?.error?.message) ui.out(`${" ".repeat(10)}${ui.c.red(job.error.message)}`);
+    }
+    return ExitCode.Ok;
+  },
+};
+
+export const jobs: CommandSpec = {
+  name: "jobs",
+  aliases: ["job"],
+  group: "Models and jobs",
+  summary: "List, wait for, inspect and cancel jobs",
+  commands: [list, get, status, wait, cancel, events],
+};
+
+function took(job: Job): string {
+  if (!job.completed_at) return "";
+  const start = Date.parse(job.started_at ?? job.created_at);
+  const end = Date.parse(job.completed_at);
+  return Number.isFinite(start) && Number.isFinite(end) ? formatDuration(end - start) : "";
+}
+
+function paintState(ctx: Context, state: string): string {
+  const { c } = ctx.ui;
+  if (state === "completed") return c.green(state);
+  if (state === "failed") return c.red(state);
+  if (state === "canceled") return c.yellow(state);
+  return c.cyan(state);
+}
