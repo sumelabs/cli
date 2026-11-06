@@ -152,6 +152,9 @@ Try it
 | [`models`](#models) | List models and prices, or show one |
 | [`schema`](#schema) | Every input a model takes: type, limits, choices, flag |
 | [`jobs`](#jobs) | List, wait for, inspect, follow and cancel jobs |
+| [`balance`](#account) | What the workspace can spend, in dollars and credits |
+| [`usage`](#account) | What recent jobs cost (`usage list`; `usage get` works too) |
+| [`account`](#account) | The workspace and key in use (`account get`, or `me`) |
 | [`agent`](#agent) | One page for an agent: setup, how to run, every model and its price |
 | [`init`](#agent) | Write that page into the project: AGENTS.md, a Claude skill, a Cursor rule |
 | [`auth`](#auth) | Save, check or forget your key |
@@ -274,6 +277,17 @@ sume agent --write CLAUDE.md    # the page as a marked block in any one file
 
 The page is what an agent needs and nothing else: the install line, where the key comes from (`SUME_API_KEY` or `./.env`), the host (`https://api.sume.com`, nothing to set) and the one to avoid (`https://api.open.sume.com`), three commands that make a file, the spend cap, and what each exit code means. `init` and `--write` keep it between markers, so running them again refreshes the page and leaves the rest of the file alone; `init` makes no network calls. `agent` adds the live model list from the public catalog (no key).
 
+### account
+
+```sh
+sume balance                    # $36.71 (2,294 credits)  Personal (personal)
+sume usage list --limit 5       # what the newest jobs cost: job, operation, status, credits, dollars
+sume account get                # the workspace the key bills, and the key's name, prefix and scopes
+sume balance --json | jq -r .balance.available_usd
+```
+
+A key belongs to one workspace, so these show where runs are billed and what is left before you spend. `auth status` and `doctor` show the same workspace and balance. When the key comes from `./.env`, `run` and `upload` say so, and name the workspace it bills.
+
 ### auth
 
 ```sh
@@ -292,7 +306,8 @@ $ sume doctor
 ✓ Config  ~/.config/sume/config.json (mode 600)
 ✓ API     https://api.sume.com · ok · build 8c2739aeb (v1.0.13) · 197ms
 ✓ Models  52 models in the catalog · 117ms
-✓ Key     sume_live_Xy12_ab3…9QzK (SUME_API_KEY) · accepted · 120ms
+✓ Key     sume_live_Xy12_ab3…9QzK (SUME_API_KEY) · accepted · 120ms · Personal (personal)
+✓ Balance $36.71 (2,294 credits)
 ✓ Media   media.sume.com reachable · 97ms
 ```
 
@@ -418,7 +433,7 @@ sume run  ──▶  POST /v1/{image,video}-router/generate   202 + job id, with
 | `Missing or invalid API key` (exit 3) | The key is wrong, revoked, or made for the other [API host](#api-hosts). The error names the host to try; otherwise create a new key at sume.com → Settings → API keys. |
 | `The API key contains spaces, line breaks…` (exit 3) | The key was pasted with extra characters. Copy it again. |
 | `open_key_route_not_allowed` (exit 3) | Sume API keys call images, video, jobs and prices only. |
-| `Balance too low` (exit 7) | Top up at sume.com → Settings → Billing. The error shows the price and your balance. |
+| `Balance too low` (exit 7) | Top up at sume.com → Settings → Billing. The error shows the price and your balance; `sume balance` shows it any time. |
 | `concurrency_limit_reached` (exit 8) | Your workspace has as many jobs in flight as it may. Wait for one to finish. |
 | `Stopped waiting after …` (exit 6) | The job is still running. `sume jobs wait <id>` collects it later; do not resubmit. |
 | `Saved 1 of 2 files. Could not download …` (exit 1) | The job finished and was paid for; one file did not arrive. Run the command the error prints (`sume jobs wait <id>`); it fetches only the missing files. |

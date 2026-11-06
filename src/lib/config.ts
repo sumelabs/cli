@@ -22,6 +22,8 @@ export const WRONG_BASE_URL = "https://api.open.sume.com";
 /** Where keys are made. */
 export const KEYS_URL = "https://www.sume.com/dashboard/api-keys";
 
+export const BILLING_URL = "https://www.sume.com/dashboard/billing";
+
 /** How to install the CLI, one line per platform. */
 export const INSTALL = {
   sh: "curl -fsSL https://raw.githubusercontent.com/sumelabs/cli/main/install.sh | sh",

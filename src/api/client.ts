@@ -1,8 +1,10 @@
 import { CliError, ExitCode } from "../lib/errors.ts";
 import { ApiError } from "./errors.ts";
 import type {
+  Account,
   ApiErrorBody,
   Asset,
+  Balance,
   CancelResponse,
   Catalog,
   CatalogModel,
@@ -15,6 +17,9 @@ import type {
   StatusResponse,
   SubmitResponse,
   UploadTarget,
+  UsageRow,
+  Workspace,
+  WorkspaceList,
 } from "./types.ts";
 
 export type Router = "image" | "video";
@@ -55,11 +60,13 @@ export interface RequestOptions {
   idempotencyKey?: string | undefined;
   /** Defaults to true for GET, and for POST only with an idempotency key. */
   retry?: boolean;
+  envelope?: "data" | "none";
   signal?: AbortSignal | undefined;
 }
 
 export interface ApiResponse<T> {
   data: T;
+  raw: unknown;
   status: number;
   requestId: string | undefined;
   headers: Headers;
@@ -201,6 +208,45 @@ export class SumeClient {
     ).data;
   }
 
+  // Account.
+
+  async getAccount(signal?: AbortSignal): Promise<Account> {
+    return (await this.request<{ account: Account }>("GET", "/v1/me", { signal })).data.account;
+  }
+
+  async getBalance(signal?: AbortSignal): Promise<Balance> {
+    return (await this.request<{ balance: Balance }>("GET", "/v1/balance", { signal })).data.balance;
+  }
+
+  async listUsage(
+    limit: number | undefined,
+    signal?: AbortSignal,
+    filter: { job_id?: string } = {},
+  ): Promise<{ usage: UsageRow[]; limit?: number }> {
+    return (
+      await this.request<{ usage: UsageRow[]; limit?: number }>("GET", "/v1/usage", {
+        query: { limit, ...filter },
+        signal,
+      })
+    ).data;
+  }
+
+  async listWorkspaces(signal?: AbortSignal): Promise<WorkspaceList> {
+    return (await this.request<Workspace[]>("GET", "/v1/workspaces", { signal })).raw as WorkspaceList;
+  }
+
+  async selectWorkspace(
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<{ workspace: Workspace; previous_workspace_id: string }> {
+    const res = await this.request<{ workspace: Workspace; previous_workspace_id: string }>(
+      "POST",
+      "/v1/workspaces/select",
+      { body: { workspace_id: workspaceId }, retry: true, signal, envelope: "none" },
+    );
+    return res.data;
+  }
+
   // Direct upload.
 
   async createUpload(
@@ -303,6 +349,9 @@ export class SumeClient {
       const json = parseJson(text);
 
       if (response.ok) {
+        if (options.envelope === "none" && json && typeof json === "object") {
+          return { data: json as T, raw: json, status: response.status, requestId, headers: response.headers };
+        }
         const envelope = json as { data?: T } | undefined;
         if (!envelope || typeof envelope !== "object" || !("data" in envelope)) {
           throw new CliError(`Unexpected response from ${method} ${path} (${response.status}).`, {
@@ -310,7 +359,7 @@ export class SumeClient {
             hint: requestId ? `Request id: ${requestId}` : undefined,
           });
         }
-        return { data: envelope.data as T, status: response.status, requestId, headers: response.headers };
+        return { data: envelope.data as T, raw: json, status: response.status, requestId, headers: response.headers };
       }
 
       const errorBody = toErrorBody(json, response.status, text, new URL(url).host);

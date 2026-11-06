@@ -2,9 +2,17 @@ import { stat } from "node:fs/promises";
 import { ApiError } from "../api/errors.ts";
 import type { Context } from "../context.ts";
 import type { CommandSpec } from "../lib/args.ts";
-import { DEFAULT_BASE_URL, keySourceLabel, maskKey, otherHostHint, WRONG_BASE_URL } from "../lib/config.ts";
+import {
+  BILLING_URL,
+  DEFAULT_BASE_URL,
+  keySourceLabel,
+  maskKey,
+  otherHostHint,
+  WRONG_BASE_URL,
+} from "../lib/config.ts";
 import { ExitCode } from "../lib/errors.ts";
 import { VERSION } from "../version.ts";
+import { balanceLine, currentWorkspace, workspaceLabel } from "./account.ts";
 import { compareVersions, isStandaloneBinary, REPO } from "./update.ts";
 import { versionInfo } from "./version.ts";
 
@@ -169,7 +177,24 @@ async function runChecks(ctx: Context): Promise<Check[]> {
     const check = await timed(() => client.listJobs({ limit: 1 }, signal(15_000)));
     const source = keySourceLabel(apiKeySource);
     if (check.value) {
-      checks.push({ name: "Key", status: "ok", detail: `${maskKey(apiKey)} (${source}) · accepted · ${check.ms}ms` });
+      const [workspace, funds] = await Promise.all([
+        currentWorkspace(ctx),
+        timed(() => client.getBalance(signal(15_000))),
+      ]);
+      checks.push({
+        name: "Key",
+        status: "ok",
+        detail: `${maskKey(apiKey)} (${source}) · accepted · ${check.ms}ms${workspace ? ` · ${workspaceLabel(workspace)}` : ""}`,
+      });
+      if (funds.value) {
+        const empty = funds.value.state === "empty";
+        checks.push({
+          name: "Balance",
+          status: empty ? "warn" : "ok",
+          detail: empty ? `nothing to spend (${balanceLine(funds.value)})` : balanceLine(funds.value),
+          ...(empty ? { fix: `Top up at ${BILLING_URL}` } : {}),
+        });
+      }
     } else {
       const auth = check.error instanceof ApiError && (check.error.status === 401 || check.error.status === 403);
       checks.push({

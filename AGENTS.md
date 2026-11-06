@@ -3,7 +3,7 @@
 Two kinds of agent read this. To **use** `sume` (make images and video for someone), follow the first section; it is the page `sume agent` prints. To **change** this repository, read the second.
 
 <!-- BEGIN sume -->
-## s## sume: images and video from the Sume API
+## sume: images and video from the Sume API
 
 `sume` runs any Sume API model from the shell: it prices the request in dollars, waits for the job, and saves the file.
 
@@ -29,7 +29,7 @@ sume run seedance-2-mini "a paper boat" -d 4 -r 480p --max-usd 0.50 -o out/ --js
 
 - Name the model yourself: prices differ by more than 100× between models. Before a large spend, show the user `sume estimate` with the same flags (free).
 - `run` prints the saved file's path. With `--json` it prints `{"job", "usd", "artifacts": [{"path", "url", "content_type"}]}`; `SUME_CLI_OUTPUT=json` does that without the flag.
-- Cap the spend with `--max-usd`, or `SUME_CLI_MAX_USD` for every run. Over the cap nothing is submitted (exit 7).
+- Cap the spend with `--max-usd`, or `SUME_CLI_MAX_USD` for every run. Over the cap nothing is submitted (exit 7). `sume balance --json` says what the workspace has left.
 - Local files work wherever a URL does (`--image ./photo.png`, `--video`, `--audio`). Every field in `sume schema <model>` is also a flag, like `--captions.style glass`.
 - Long video: `--no-wait` returns the job id at once, and `sume jobs wait <job> -o out/` saves it later. After a timeout (exit 6) or Ctrl-C (130) the job keeps running: resume it with `jobs wait`. Never resubmit; a second submit is a second charge.
 

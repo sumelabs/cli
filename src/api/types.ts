@@ -209,3 +209,54 @@ export interface UploadTarget {
     max_bytes?: number;
   };
 }
+
+export interface Account {
+  workspace_id: string;
+  owner_user_id: string;
+  api_key?: { id: string; name: string | null; prefix: string; scopes: string[] } | null;
+  auth_source: string;
+  [field: string]: unknown;
+}
+
+export interface Balance {
+  available_credits: number;
+  available_usd?: string;
+  state: "funded" | "empty" | string;
+  updated_at: string | null;
+  expiration?: {
+    next_expires_at?: string | null;
+    next_expiring_credits?: number | null;
+    expiring_soon_days?: number;
+    expiring_soon_credits?: number;
+  } | null;
+  invoice?: Record<string, unknown> | null;
+  [field: string]: unknown;
+}
+
+export interface UsageRow {
+  id: string;
+  request_id: string | null;
+  job_id: string | null;
+  operation_type: string;
+  status: "reserved" | "captured" | "refunded" | string;
+  credits: number;
+  usd?: string;
+  auth_source: string;
+  created_at: string;
+  [field: string]: unknown;
+}
+
+export interface Workspace {
+  object?: "workspace";
+  id: string;
+  name: string;
+  kind: "personal" | "team" | string;
+  is_selected: boolean;
+}
+
+export interface WorkspaceList {
+  object: "list";
+  data: Workspace[];
+  selected_workspace_id: string;
+  switchable: boolean;
+}

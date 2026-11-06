@@ -1,4 +1,5 @@
 import { ApiError } from "./api/errors.ts";
+import { account, balance, me, usage } from "./commands/account.ts";
 import { agent, init } from "./commands/agent.ts";
 import { auth } from "./commands/auth.ts";
 import { complete } from "./commands/complete.ts";
@@ -100,6 +101,10 @@ export const root: CommandSpec = {
     models,
     schema,
     jobs,
+    balance,
+    usage,
+    account,
+    me,
     agent,
     init,
     auth,

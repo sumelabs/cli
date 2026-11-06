@@ -4,6 +4,7 @@ import { CliError, ExitCode } from "../lib/errors.ts";
 import { isHttpUrl } from "../lib/media.ts";
 import { formatBytes } from "../lib/ui.ts";
 import { checkUploadable, type UploadedFile, uploadFile, uploadFromUrl } from "../lib/upload.ts";
+import { noteDotenvKey } from "./account.ts";
 
 export const upload: CommandSpec = {
   name: "upload",
@@ -26,6 +27,7 @@ export const upload: CommandSpec = {
     // Every local file is checked before the first upload, and the key too.
     for (const path of parsed.args) if (!isHttpUrl(path)) await checkUploadable(resolve(ctx.cwd, path));
     ctx.client().requireKey();
+    await noteDotenvKey(ctx);
 
     const uploaded: UploadedFile[] = [];
     const failed: { path: string; error: CliError }[] = [];
