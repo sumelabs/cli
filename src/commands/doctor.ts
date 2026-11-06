@@ -10,7 +10,7 @@ import {
   otherHostHint,
   WRONG_BASE_URL,
 } from "../lib/config.ts";
-import { ExitCode } from "../lib/errors.ts";
+import { CliError, ExitCode } from "../lib/errors.ts";
 import { VERSION } from "../version.ts";
 import { balanceLine, currentWorkspace, workspaceLabel } from "./account.ts";
 import { compareVersions, isStandaloneBinary, REPO } from "./update.ts";
@@ -92,7 +92,7 @@ async function runChecks(ctx: Context): Promise<Check[]> {
     checks.push({ name: "Update", status: "warn", detail: "could not check GitHub for releases" });
   }
 
-  const { configPath, apiKey, apiKeySource } = ctx.settings;
+  const { configPath, apiKey, apiKeySource, session } = ctx.settings;
   const config = await timed(() => stat(configPath));
   if (config.value) {
     const mode = config.value.mode & 0o777;
@@ -165,17 +165,17 @@ async function runChecks(ctx: Context): Promise<Check[]> {
     });
   }
 
-  if (!apiKey) {
+  if (!apiKey && !session) {
     checks.push({
       name: "Key",
       status: "fail",
       detail: "none",
-      fix: "Create a key at https://www.sume.com/dashboard/api-keys, then `sume auth login` or export SUME_API_KEY.",
+      fix: "Sign in with `sume login`, or make a key at https://www.sume.com/dashboard/api-keys and export SUME_API_KEY.",
       exit: ExitCode.Auth,
     });
   } else {
     const check = await timed(() => client.listJobs({ limit: 1 }, signal(15_000)));
-    const source = keySourceLabel(apiKeySource);
+    const who = apiKey ? `${maskKey(apiKey)} (${keySourceLabel(apiKeySource)})` : "Sume sign-in";
     if (check.value) {
       const [workspace, funds] = await Promise.all([
         currentWorkspace(ctx),
@@ -184,7 +184,7 @@ async function runChecks(ctx: Context): Promise<Check[]> {
       checks.push({
         name: "Key",
         status: "ok",
-        detail: `${maskKey(apiKey)} (${source}) · accepted · ${check.ms}ms${workspace ? ` · ${workspaceLabel(workspace)}` : ""}`,
+        detail: `${who} · accepted · ${check.ms}ms${workspace ? ` · ${workspaceLabel(workspace)}` : ""}`,
       });
       if (funds.value) {
         const empty = funds.value.state === "empty";
@@ -196,14 +196,19 @@ async function runChecks(ctx: Context): Promise<Check[]> {
         });
       }
     } else {
-      const auth = check.error instanceof ApiError && (check.error.status === 401 || check.error.status === 403);
+      const auth =
+        (check.error instanceof ApiError && (check.error.status === 401 || check.error.status === 403)) ||
+        (check.error instanceof CliError && check.error.code === "login_required");
       checks.push({
         name: "Key",
         status: "fail",
-        detail: `${maskKey(apiKey)} (${source}) · ${auth ? "refused (wrong or revoked)" : errorText(check.error)}`,
-        fix: auth
-          ? `${otherHostHint(client.baseUrl)} Or create a new key at https://www.sume.com/dashboard/api-keys.`
-          : "Retry; quote the request id if it persists.",
+        detail: `${who} · ${auth ? "refused (wrong or revoked)" : errorText(check.error)}`,
+        fix:
+          check.error instanceof CliError && check.error.code === "login_required"
+            ? "Sign in again: sume login"
+            : auth
+              ? `${otherHostHint(client.baseUrl)} Or create a new key at https://www.sume.com/dashboard/api-keys.`
+              : "Retry; quote the request id if it persists.",
         exit: auth ? ExitCode.Auth : ExitCode.Error,
       });
     }

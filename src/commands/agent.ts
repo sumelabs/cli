@@ -41,7 +41,7 @@ export function agentMarkdown(): string {
     "",
     `Windows: \`${INSTALL.powershell}\`. No install, with Node 22+: put \`${INSTALL.npx}\` where these examples say \`sume\`.`,
     "",
-    `- Key: \`SUME_API_KEY\`, read from the environment or from \`./.env\`. A person makes it at ${KEYS_URL}. Never print it, and never paste it into a chat or a command line.`,
+    `- Key: \`SUME_API_KEY\`, read from the environment or from \`./.env\`. A person makes it at ${KEYS_URL}, or signs this machine in once with \`sume login --device\` (a code to approve). Never print a key, and never paste it into a chat or a command line.`,
     `- Host: \`${DEFAULT_BASE_URL}\`, the default; nothing to set. Never \`${WRONG_BASE_URL}\`: that is Sume Open's API, and sume.com keys fail there.`,
     "- Check both: `sume doctor`.",
     "",

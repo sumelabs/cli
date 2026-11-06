@@ -36,9 +36,15 @@ export interface ResponseInfo extends RequestInfo {
   ms: number;
 }
 
+export interface Credential {
+  token(signal?: AbortSignal): Promise<string>;
+  refreshAfterRejection(rejected: string, signal?: AbortSignal): Promise<string | undefined>;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   apiKey?: string | undefined;
+  credential?: Credential | undefined;
   userAgent: string;
   /** Retries after the first attempt, for retry-safe requests. */
   maxRetries?: number;
@@ -102,6 +108,7 @@ export class SumeClient {
   readonly baseUrl: string;
   readonly hasKey: boolean;
   readonly #apiKey: string | undefined;
+  readonly #credential: Credential | undefined;
   readonly #userAgent: string;
   readonly #maxRetries: number;
   readonly #timeoutMs: number;
@@ -113,7 +120,8 @@ export class SumeClient {
   constructor(options: ClientOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.#apiKey = checkKey(options.apiKey);
-    this.hasKey = this.#apiKey !== undefined;
+    this.#credential = this.#apiKey ? undefined : options.credential;
+    this.hasKey = this.#apiKey !== undefined || this.#credential !== undefined;
     this.#userAgent = options.userAgent;
     this.#maxRetries = options.maxRetries ?? 3;
     this.#timeoutMs = options.timeoutMs ?? 60_000;
@@ -279,11 +287,11 @@ export class SumeClient {
 
   /** Throws the "no key" error when there is no key: for commands that will need one, before any work. */
   requireKey(): void {
-    if (this.#apiKey) return;
-    throw new CliError("No API key. Set SUME_API_KEY, put it in ./.env, or run `sume auth login`.", {
+    if (this.hasKey) return;
+    throw new CliError("No API key or Sume sign-in. Set SUME_API_KEY, put it in ./.env, or run `sume login`.", {
       exitCode: ExitCode.Auth,
       code: "missing_api_key",
-      hint: "A person makes the key at https://www.sume.com/dashboard/api-keys (an agent cannot).",
+      hint: "A person signs in once with `sume login`, or makes a key at https://www.sume.com/dashboard/api-keys.",
     });
   }
 
@@ -295,7 +303,15 @@ export class SumeClient {
       accept: "application/json",
       "user-agent": this.#userAgent,
     };
-    if (auth !== "none" && this.#apiKey) headers.authorization = `Bearer ${this.#apiKey}`;
+    let bearer: string | undefined = auth === "none" ? undefined : this.#apiKey;
+    if (auth !== "none" && !bearer && this.#credential) {
+      bearer =
+        auth === "optional"
+          ? await this.#credential.token(options.signal).catch(() => undefined)
+          : await this.#credential.token(options.signal);
+    }
+    if (bearer) headers.authorization = `Bearer ${bearer}`;
+    let refreshed = false;
     if (options.idempotencyKey) headers["idempotency-key"] = options.idempotencyKey;
     let body: string | undefined;
     if (options.body !== undefined) {
@@ -363,6 +379,16 @@ export class SumeClient {
       }
 
       const errorBody = toErrorBody(json, response.status, text, new URL(url).host);
+      if (response.status === 401 && this.#credential && bearer && !refreshed) {
+        refreshed = true;
+        const next = await this.#credential.refreshAfterRejection(bearer, options.signal);
+        if (next) {
+          bearer = next;
+          headers.authorization = `Bearer ${bearer}`;
+          attempt--;
+          continue;
+        }
+      }
       if (attempt < attempts && RETRY_STATUSES.has(response.status) && errorBody.code !== "concurrency_limit_reached") {
         const after = retryAfterMs(response.headers, errorBody);
         await this.#sleep(after ?? backoffMs(attempt), options.signal);

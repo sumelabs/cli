@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -124,6 +124,50 @@ export class MockApi {
   readsUntilDone = 2;
   balanceUsd = 10;
   workspace = { id: "user_test", name: "Personal", kind: "personal" as "personal" | "team" };
+  readonly teams = [
+    { id: "user_test", name: "Personal", kind: "personal" as const },
+    { id: "org_acme", name: "Acme Team", kind: "team" as const },
+  ];
+  readonly oauth = {
+    tokenTtlSeconds: 3600,
+    devicePendingPolls: 2,
+    codes: new Map<string, { challenge: string; redirectUri: string; resource: string }>(),
+    devices: new Map<string, { polls: number }>(),
+    access: new Map<string, { family: string; expiresAt: number; revoked: boolean }>(),
+    refresh: new Map<string, { family: string; used: boolean; revoked: boolean }>(),
+    families: new Map<string, { workspace: string }>(),
+    revoked: [] as string[],
+    grants: [] as string[],
+  };
+
+  expireAccessTokens(): void {
+    for (const token of this.oauth.access.values()) token.expiresAt = 0;
+  }
+
+  #issue(family: string) {
+    const access = `mcp_at_${randomUUID().replaceAll("-", "")}`;
+    const refresh = `mcp_rt_${randomUUID().replaceAll("-", "")}`;
+    this.oauth.access.set(access, {
+      family,
+      expiresAt: Date.now() + this.oauth.tokenTtlSeconds * 1000,
+      revoked: false,
+    });
+    this.oauth.refresh.set(refresh, { family, used: false, revoked: false });
+    return {
+      access_token: access,
+      token_type: "Bearer",
+      expires_in: this.oauth.tokenTtlSeconds,
+      refresh_token: refresh,
+      scope: "mcp:read mcp:write",
+    };
+  }
+
+  #session(authorization: string | undefined) {
+    const bearer = authorization?.replace(/^Bearer /u, "") ?? "";
+    const access = this.oauth.access.get(bearer);
+    if (!access || access.revoked || access.expiresAt <= Date.now()) return undefined;
+    return this.oauth.families.get(access.family);
+  }
   url = "";
   #server: Server | undefined;
 
@@ -154,7 +198,13 @@ export class MockApi {
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const raw = Buffer.concat(chunks);
     const isJson = (req.headers["content-type"] ?? "").includes("json");
-    const body = isJson && raw.length ? JSON.parse(raw.toString("utf8")) : undefined;
+    const isForm = (req.headers["content-type"] ?? "").includes("x-www-form-urlencoded");
+    const body =
+      isJson && raw.length
+        ? JSON.parse(raw.toString("utf8"))
+        : isForm
+          ? Object.fromEntries(new URLSearchParams(raw.toString("utf8")))
+          : undefined;
     this.requests.push({ method: req.method ?? "GET", path: url.pathname, headers: req.headers, body });
 
     const fault = this.faults.find(
@@ -207,8 +257,128 @@ export class MockApi {
     };
     const error = (status: number, code: string, message = code, extra: Record<string, unknown> = {}) =>
       send(status, { error: { code, message, request_id: "req_test", retryable: status >= 500, ...extra } });
-    const authed = () => req.headers.authorization === `Bearer ${TEST_KEY}`;
+    const signedIn = this.#session(req.headers.authorization);
+    const authed = () => req.headers.authorization === `Bearer ${TEST_KEY}` || signedIn !== undefined;
     const path = url.pathname;
+    const issuer = this.url;
+    const clientId = `${issuer}/oauth/clients/sume-cli`;
+    const oauthError = (status: number, code: string, description: string) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: code, error_description: description }));
+    };
+
+    if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") {
+      return send(200, {
+        resource: `${issuer}/mcp`,
+        authorization_servers: [issuer],
+        scopes_supported: ["mcp:read", "mcp:write"],
+      });
+    }
+    if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") {
+      return send(200, {
+        issuer,
+        authorization_endpoint: `${issuer}/oauth/authorize`,
+        token_endpoint: `${issuer}/oauth/token`,
+        device_authorization_endpoint: `${issuer}/oauth/device_authorization`,
+        revocation_endpoint: `${issuer}/oauth/revoke`,
+        code_challenge_methods_supported: ["S256"],
+      });
+    }
+    if (req.method === "GET" && path === "/oauth/authorize") {
+      const q = url.searchParams;
+      const redirect = q.get("redirect_uri") ?? "";
+      const loopback = /^http:\/\/127\.0\.0\.1:\d+\/callback$/u.test(redirect);
+      if (q.get("client_id") !== clientId || !loopback || q.get("code_challenge_method") !== "S256") {
+        return oauthError(400, "invalid_request", "Bad authorization request.");
+      }
+      if (q.get("resource") !== new URL(issuer).origin) return oauthError(400, "invalid_target", "Unknown resource.");
+      const code = `mcp_ac_${randomUUID()}`;
+      this.oauth.codes.set(code, {
+        challenge: q.get("code_challenge") ?? "",
+        redirectUri: redirect,
+        resource: q.get("resource") ?? "",
+      });
+      const back = new URL(redirect);
+      back.searchParams.set("code", code);
+      back.searchParams.set("state", q.get("state") ?? "");
+      back.searchParams.set("iss", issuer);
+      res.writeHead(302, { location: back.toString() });
+      res.end();
+      return;
+    }
+    if (req.method === "POST" && path === "/oauth/device_authorization") {
+      if (body?.client_id !== clientId) return oauthError(401, "invalid_client", "Unknown client.");
+      const device = `mcp_dc_${randomUUID()}`;
+      this.oauth.devices.set(device, { polls: this.oauth.devicePendingPolls });
+      return send(200, {
+        device_code: device,
+        user_code: "ABCD-EFGH",
+        verification_uri: `${issuer}/oauth/device`,
+        verification_uri_complete: `${issuer}/oauth/device?user_code=ABCD-EFGH`,
+        expires_in: 600,
+        interval: 5,
+      });
+    }
+    if (req.method === "POST" && path === "/oauth/token") {
+      if (body?.client_id !== clientId) return oauthError(401, "invalid_client", "Unknown client.");
+      this.oauth.grants.push(String(body.grant_type));
+      if (body.grant_type === "authorization_code") {
+        const grant = this.oauth.codes.get(String(body.code));
+        this.oauth.codes.delete(String(body.code));
+        const verifier = createHash("sha256")
+          .update(String(body.code_verifier ?? ""))
+          .digest("base64url");
+        if (
+          !grant ||
+          grant.challenge !== verifier ||
+          grant.redirectUri !== body.redirect_uri ||
+          grant.resource !== body.resource
+        ) {
+          return oauthError(400, "invalid_grant", "The code, verifier or redirect does not match.");
+        }
+        const family = randomUUID();
+        this.oauth.families.set(family, { workspace: "user_test" });
+        return send(200, this.#issue(family));
+      }
+      if (body.grant_type === "urn:ietf:params:oauth:grant-type:device_code") {
+        const device = this.oauth.devices.get(String(body.device_code));
+        if (!device) return oauthError(400, "expired_token", "The code expired.");
+        if (device.polls > 0) {
+          device.polls--;
+          return oauthError(400, "authorization_pending", "Waiting for the person to approve the sign-in.");
+        }
+        this.oauth.devices.delete(String(body.device_code));
+        const family = randomUUID();
+        this.oauth.families.set(family, { workspace: "user_test" });
+        return send(200, this.#issue(family));
+      }
+      if (body.grant_type === "refresh_token") {
+        const token = this.oauth.refresh.get(String(body.refresh_token));
+        if (!token || token.revoked) return oauthError(400, "invalid_grant", "Refresh token is invalid.");
+        if (token.used) {
+          for (const t of this.oauth.refresh.values()) if (t.family === token.family) t.revoked = true;
+          for (const t of this.oauth.access.values()) if (t.family === token.family) t.revoked = true;
+          return oauthError(400, "invalid_grant", "Refresh token was already used.");
+        }
+        token.used = true;
+        return send(200, this.#issue(token.family));
+      }
+      return oauthError(400, "unsupported_grant_type", "Unsupported grant.");
+    }
+    if (req.method === "POST" && path === "/oauth/revoke") {
+      const token = String(body?.token ?? "");
+      this.oauth.revoked.push(token);
+      const refresh = this.oauth.refresh.get(token);
+      if (refresh) {
+        for (const t of this.oauth.refresh.values()) if (t.family === refresh.family) t.revoked = true;
+        for (const t of this.oauth.access.values()) if (t.family === refresh.family) t.revoked = true;
+      }
+      const access = this.oauth.access.get(token);
+      if (access) access.revoked = true;
+      res.writeHead(200);
+      res.end();
+      return;
+    }
 
     // Files the API "serves" from its CDN.
     if (req.method === "GET" && path.startsWith("/media/")) {
@@ -318,12 +488,24 @@ export class MockApi {
     if (req.method === "GET" && path === "/v1/me") {
       return send(200, {
         data: {
-          account: {
-            workspace_id: this.workspace.id,
-            owner_user_id: "user_test",
-            api_key: { id: "key_test", name: "test key", prefix: TEST_KEY.slice(0, 18), scopes: ["account:read"] },
-            auth_source: "ledger",
-          },
+          account: signedIn
+            ? {
+                workspace_id: signedIn.workspace,
+                owner_user_id: "user_test",
+                api_key: {
+                  id: `mcp_oauth_token_${randomUUID()}`,
+                  name: "Sume sign-in",
+                  prefix: "mcp_at_abcd",
+                  scopes: ["mcp:read", "account:read"],
+                },
+                auth_source: "ledger",
+              }
+            : {
+                workspace_id: this.workspace.id,
+                owner_user_id: "user_test",
+                api_key: { id: "key_test", name: "test key", prefix: TEST_KEY.slice(0, 18), scopes: ["account:read"] },
+                auth_source: "ledger",
+              },
         },
       });
     }
@@ -369,11 +551,30 @@ export class MockApi {
       return send(200, { data: { usage: rows.slice(0, limit), limit } });
     }
     if (req.method === "GET" && path === "/v1/workspaces") {
+      if (signedIn) {
+        return send(200, {
+          object: "list",
+          data: this.teams.map((w) => ({ object: "workspace", ...w, is_selected: w.id === signedIn.workspace })),
+          selected_workspace_id: signedIn.workspace,
+          switchable: true,
+        });
+      }
       return send(200, {
         object: "list",
         data: [{ object: "workspace", ...this.workspace, is_selected: true }],
         selected_workspace_id: this.workspace.id,
         switchable: false,
+      });
+    }
+    if (req.method === "POST" && path === "/v1/workspaces/select" && signedIn) {
+      const next = this.teams.find((w) => w.id === body?.workspace_id);
+      if (!next) return error(404, "workspace_not_found", "No such workspace.");
+      const previous = signedIn.workspace;
+      signedIn.workspace = next.id;
+      return send(200, {
+        object: "workspace_selection",
+        workspace: { object: "workspace", ...next, is_selected: true },
+        previous_workspace_id: previous,
       });
     }
     if (req.method === "POST" && path === "/v1/workspaces/select") {

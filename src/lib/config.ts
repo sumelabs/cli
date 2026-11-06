@@ -36,9 +36,49 @@ export const INSTALL = {
 /** The Sume API docs (models, jobs, errors, webhooks). */
 export const DOCS_URL = "https://docs.sume.com/public-api";
 
+export interface StoredSession {
+  issuer: string;
+  client_id: string;
+  resource: string;
+  token_endpoint: string;
+  revocation_endpoint?: string;
+  access_token: string;
+  refresh_token?: string;
+  expires_at: string;
+  scope?: string;
+}
+
 export interface StoredConfig {
   api_key?: string;
   base_url?: string;
+  session?: StoredSession;
+}
+
+function readSession(value: unknown): StoredSession | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const s = value as Record<string, unknown>;
+  const text = (key: string) => (typeof s[key] === "string" && s[key] ? (s[key] as string) : undefined);
+  const issuer = text("issuer");
+  const client_id = text("client_id");
+  const resource = text("resource");
+  const token_endpoint = text("token_endpoint");
+  const access_token = text("access_token");
+  const expires_at = text("expires_at");
+  if (!issuer || !client_id || !resource || !token_endpoint || !access_token || !expires_at) return undefined;
+  const revocation_endpoint = text("revocation_endpoint");
+  const refresh_token = text("refresh_token");
+  const scope = text("scope");
+  return {
+    issuer,
+    client_id,
+    resource,
+    token_endpoint,
+    access_token,
+    expires_at,
+    ...(revocation_endpoint ? { revocation_endpoint } : {}),
+    ...(refresh_token ? { refresh_token } : {}),
+    ...(scope ? { scope } : {}),
+  };
 }
 
 export type Source = "flag" | "env" | "config" | "default";
@@ -59,6 +99,16 @@ export interface Settings {
   baseUrl: string;
   baseUrlSource: Source;
   configPath: string;
+  session?: StoredSession | undefined;
+  sessionElsewhere?: string | undefined;
+}
+
+export function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
 }
 
 /** `$SUME_CLI_CONFIG_DIR`, else the platform's per-user config directory. */
@@ -89,10 +139,12 @@ export function readConfig(path: string): StoredConfig {
   try {
     const parsed = JSON.parse(text) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-    const { api_key, base_url } = parsed as Record<string, unknown>;
+    const { api_key, base_url, session } = parsed as Record<string, unknown>;
+    const saved = readSession(session);
     return {
       ...(typeof api_key === "string" && api_key ? { api_key } : {}),
       ...(typeof base_url === "string" && base_url ? { base_url } : {}),
+      ...(saved ? { session: saved } : {}),
     };
   } catch (cause) {
     throw new CliError(`Cannot read ${path}: it is not valid JSON.`, {
@@ -179,7 +231,24 @@ export function resolveSettings(
   else if (envBase) [baseUrl, baseUrlSource] = [envBase, "env"];
   else if (stored.base_url) [baseUrl, baseUrlSource] = [stored.base_url, "config"];
 
-  return { apiKey, apiKeySource, baseUrl, baseUrlSource, configPath: path };
+  let session: StoredSession | undefined;
+  let sessionElsewhere: string | undefined;
+  if (!apiKey && stored.session) {
+    if (sameOrigin(stored.session.resource, baseUrl)) session = stored.session;
+    else sessionElsewhere = stored.session.resource;
+  } else if (apiKeySource === "config" && stored.session && sameOrigin(stored.session.resource, baseUrl)) {
+    [apiKey, apiKeySource, session] = [undefined, undefined, stored.session];
+  }
+
+  return {
+    apiKey,
+    apiKeySource,
+    baseUrl,
+    baseUrlSource,
+    configPath: path,
+    ...(session ? { session } : {}),
+    ...(sessionElsewhere ? { sessionElsewhere } : {}),
+  };
 }
 
 /**

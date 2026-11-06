@@ -211,7 +211,7 @@ describe("before anything is paid for", () => {
   it("fails on a missing key before any network call", async () => {
     const res = await cli(["run", "gpt-image-2", "a cup"], { key: null, cwd: tempDir() });
     expect(res.code).toBe(3);
-    expect(res.stderr).toContain("No API key.");
+    expect(res.stderr).toContain("No API key or Sume sign-in.");
     expect(api.requests).toHaveLength(0);
   });
 });

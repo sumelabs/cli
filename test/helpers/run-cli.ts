@@ -45,10 +45,18 @@ export function tempDir(prefix = "sume-test-"): string {
 /** Run the CLI in-process against `baseUrl`, with an isolated config dir and no real waiting. */
 export async function runCli(
   args: string[],
-  options: { baseUrl?: string; key?: string | null; cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+  options: {
+    baseUrl?: string;
+    key?: string | null;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    tty?: boolean;
+    openUrl?: (url: string) => void | Promise<void>;
+  } = {},
 ): Promise<CliResult> {
-  const stdout = new Capture();
-  const stderr = new Capture();
+  const stdout = new Capture(options.tty ?? false);
+  const stderr = new Capture(options.tty ?? false);
   const env: NodeJS.ProcessEnv = {
     SUME_CLI_CONFIG_DIR: tempDir("sume-config-"),
     XDG_CACHE_HOME: tempDir("sume-cache-"),
@@ -66,6 +74,7 @@ export async function runCli(
     sleep: () => new Promise((resolve) => setImmediate(resolve)),
     fetch: offlineFetch,
     ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.openUrl ? { openUrl: options.openUrl } : {}),
   });
   return {
     code,

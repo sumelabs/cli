@@ -21,6 +21,7 @@ Fixes land in the latest release. Run `sume update` (standalone installs) or rei
 - It never sends the key to storage upload URLs or media URLs.
 - `sume auth login` stores the key in a config file that only your user can read (mode `0600`). It does not encrypt the key, so treat that file like an SSH key. `SUME_API_KEY` in the environment avoids storing it at all.
 - It never prints the full key. `sume auth status` shows the same prefix and last four characters as the API keys page.
+- `sume login` uses OAuth with PKCE and a one-time loopback port on `127.0.0.1`, or the device code grant. The token it asks for is bound to the API host (`resource`), and the CLI never sends it to another host. Tokens live in the same owner-only config file; `sume auth token` prints the access token only when asked, and `sume logout` revokes the sign-in on the server before it removes it.
 - It collects no telemetry and checks for updates only when you run `sume update`.
 
 ## Release integrity

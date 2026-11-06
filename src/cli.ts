@@ -7,6 +7,7 @@ import { completionCommand } from "./commands/completion.ts";
 import { doctor } from "./commands/doctor.ts";
 import { estimate } from "./commands/estimate.ts";
 import { jobs } from "./commands/jobs.ts";
+import { login, logout, workspaces } from "./commands/login.ts";
 import { models } from "./commands/models.ts";
 import { run } from "./commands/run.ts";
 import { renderInputs, schema, vendoredRouter } from "./commands/schema.ts";
@@ -47,13 +48,18 @@ export const GLOBAL_FLAGS = [
 function startHere(env: NodeJS.ProcessEnv, cwd: string): string[] {
   let hasKey = Boolean(env.SUME_API_KEY);
   try {
-    hasKey ||= Boolean(resolveSettings({}, env, cwd).apiKey);
+    const settings = resolveSettings({}, env, cwd);
+    hasKey ||= Boolean(settings.apiKey || settings.session);
   } catch {
     // An unreadable config is doctor's business, not help's.
   }
   return [
     "",
-    ...(hasKey ? [] : [`No key yet: a person makes one at ${KEYS_URL}; then export SUME_API_KEY or put it in ./.env.`]),
+    ...(hasKey
+      ? []
+      : [
+          `Not signed in: run \`sume login\`, or make a key at ${KEYS_URL} and export SUME_API_KEY (or put it in ./.env).`,
+        ]),
     "Setting up an agent? `sume agent` prints the install, the API host and the key setup on one page.",
   ];
 }
@@ -104,7 +110,10 @@ export const root: CommandSpec = {
     balance,
     usage,
     account,
+    workspaces,
     me,
+    login,
+    logout,
     agent,
     init,
     auth,
@@ -126,6 +135,7 @@ export interface MainOptions {
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  openUrl?: (url: string) => void | Promise<void>;
 }
 
 /** Run the CLI and return its exit code. Never calls process.exit. */
@@ -232,6 +242,7 @@ export async function main(options: MainOptions): Promise<number> {
       signal: controller.signal,
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.sleep ? { sleep: options.sleep } : {}),
+      ...(options.openUrl ? { openUrl: options.openUrl } : {}),
     });
     try {
       return (await parsed.command.run(parsed, ctx)) ?? ExitCode.Ok;
