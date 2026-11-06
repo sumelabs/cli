@@ -241,6 +241,19 @@ export class MockApi {
     if (req.method === "POST" && path === "/v1/open/estimate") {
       const model = MODELS.find((m) => m.id === body?.model);
       if (!model) return error(404, "model_not_found");
+      if (model.kind === "lipsync") {
+        for (const field of ["video_url", "audio_url"]) {
+          const value = body.input?.[field];
+          if (typeof value === "string" && new URL(value).hostname === "upload.invalid") {
+            return error(
+              400,
+              "media_unreadable",
+              `${field} could not be read: its host name does not exist. Send a public HTTPS URL to a playable file, or upload it to Sume first.`,
+              { details: { field, reason: "no_such_host", source_host: "upload.invalid" } },
+            );
+          }
+        }
+      }
       // Like the real estimate, a duration past the model's limit is priced at the limit.
       const duration = Math.min(Number(body.input?.duration ?? 0), 15);
       const usd = model.kind === "image" ? 0.0077 : 0.0879 * Math.max(duration, 1);

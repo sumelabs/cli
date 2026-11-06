@@ -209,7 +209,7 @@ $ sume estimate seedance-2-mini "a paper boat" -d 4 -r 480p
 $0.3516  seedance-2-mini · 4s · 480p · 40.176 × 1000 video tokens
 ```
 
-`estimate` takes the same input flags as `run` and submits nothing. Local files are not uploaded to price a request. If the API prices something other than what you asked for, `estimate` says so. A 99-second request on a 15-second model, for example, is priced as 15 seconds.
+`estimate` takes the same input flags as `run` and submits nothing. Local files are not uploaded to price a request. Some models are priced by the length of a file (lip-sync by the speech, some video models by a reference clip), and Sume reads that length from the file itself: `estimate` then says which file, and the command that uploads it so its URL can be priced. `sume run` uploads such a file before it prices the run, so `--max-usd` is checked against the real file and nothing is submitted over it. If the API prices something other than what you asked for, `estimate` says so. A 99-second request on a 15-second model, for example, is priced as 15 seconds.
 
 ### upload
 

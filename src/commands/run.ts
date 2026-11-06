@@ -8,6 +8,7 @@ import { buildBody, type InputFlags, localMediaPaths, mediaValues, replaceMedia,
 import { checkTemplate, checkWritable } from "../lib/download.ts";
 import { CliError, ExitCode, UsageError } from "../lib/errors.ts";
 import { isHttpUrl } from "../lib/media.ts";
+import { needsUploadToPrice, priceNeedsUpload, withPlaceholders } from "../lib/pricing.ts";
 import { unknownFields } from "../lib/schema.ts";
 import { formatBytes, formatUsd } from "../lib/ui.ts";
 import { checkUploadable, uploadFile } from "../lib/upload.ts";
@@ -121,27 +122,40 @@ async function runCommand(parsed: Parsed, ctx: Context): Promise<number> {
   };
   for (const note of unknownFields(routerFor(model), body)) warn(note);
 
-  // The estimate prices the request as sent; uploaded files only change
-  // their URLs, so placeholders stand in for them until they exist.
-  const estimateBody = structuredClone(body);
-  replaceMedia(
-    estimateBody,
-    new Map(localFiles.map((p) => [p, `https://upload.invalid/${encodeURIComponent(basename(p))}`])),
-  );
-  const estimating: Promise<{ estimate?: Estimate; error?: unknown }> = client
-    .estimate(model.id, estimateBody, ctx.signal)
-    .then(
+  const price = (input: Record<string, unknown>): Promise<{ estimate?: Estimate; error?: unknown }> =>
+    client.estimate(model.id, input, ctx.signal).then(
       (estimate) => ({ estimate }),
       (error: unknown) => {
         ui.debug(`estimate failed: ${(error as Error).message}`);
         return { error };
       },
     );
+  let estimating = price(withPlaceholders(body, localFiles));
+  const needsFile = (error: unknown) => localFiles.length > 0 && needsUploadToPrice(error);
+
+  let uploaded = false;
+  const uploadLocal = async () => {
+    const urls = new Map<string, string>();
+    for (const path of localFiles) {
+      ui.spin(`Uploading ${basename(path)}`);
+      const done = await uploadFile(client, resolve(ctx.cwd, path), { signal: ctx.signal, sleep: ctx.sleep });
+      urls.set(path, done.url);
+      ui.info(`${ui.c.dim("↑")} ${basename(path)} ${ui.c.dim(`${formatBytes(done.sizeBytes)} uploaded`)}`);
+    }
+    replaceMedia(body, urls);
+    uploaded = true;
+  };
 
   if (flags["dry-run"] === true) {
-    const { estimate } = await estimating;
+    const { estimate, error } = await estimating;
     ui.stopSpinner();
-    const notes = [...warnings, ...(estimate ? pricingNotes(body, estimate) : [])];
+    const notes = [
+      ...warnings,
+      ...(estimate ? pricingNotes(body, estimate) : []),
+      ...(!estimate && needsFile(error)
+        ? [`${priceNeedsUpload(error as ApiError, model.id, body, localFiles).message} A run uploads it first.`]
+        : []),
+    ];
     if (json) {
       ui.json({
         model: model.id,
@@ -162,7 +176,12 @@ async function runCommand(parsed: Parsed, ctx: Context): Promise<number> {
   }
 
   if (maxUsd !== undefined) {
-    const { estimate, error } = await estimating;
+    let { estimate, error } = await estimating;
+    if (!estimate && needsFile(error)) {
+      await uploadLocal();
+      estimating = price(body);
+      ({ estimate, error } = await estimating);
+    }
     if (!estimate) throw unpriced(error);
     for (const note of pricingNotes(body, estimate)) warn(note);
     if (Number(estimate.usd) > maxUsd) {
@@ -171,23 +190,24 @@ async function runCommand(parsed: Parsed, ctx: Context): Promise<number> {
         {
           exitCode: ExitCode.Funds,
           code: "over_budget",
-          ...(cap?.from === "SUME_CLI_MAX_USD"
-            ? { hint: "Raise SUME_CLI_MAX_USD, or pass --max-usd for this run." }
+          ...(cap?.from === "SUME_CLI_MAX_USD" || uploaded
+            ? {
+                hint: [
+                  cap?.from === "SUME_CLI_MAX_USD" ? "Raise SUME_CLI_MAX_USD, or pass --max-usd for this run." : "",
+                  uploaded ? "The files were uploaded to read their length; uploads are free." : "",
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              }
             : {}),
         },
       );
     }
   }
 
-  if (localFiles.length > 0) {
-    const urls = new Map<string, string>();
-    for (const path of localFiles) {
-      ui.spin(`Uploading ${basename(path)}`);
-      const uploaded = await uploadFile(client, resolve(ctx.cwd, path), { signal: ctx.signal, sleep: ctx.sleep });
-      urls.set(path, uploaded.url);
-      ui.info(`${ui.c.dim("↑")} ${basename(path)} ${ui.c.dim(`${formatBytes(uploaded.sizeBytes)} uploaded`)}`);
-    }
-    replaceMedia(body, urls);
+  if (localFiles.length > 0 && !uploaded) {
+    await uploadLocal();
+    estimating = estimating.then((first) => (!first.estimate && needsFile(first.error) ? price(body) : first));
   }
 
   const idempotencyKey = (flags["idempotency-key"] as string | undefined) ?? randomUUID();
