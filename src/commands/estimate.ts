@@ -1,8 +1,10 @@
-import { basename } from "node:path";
+import { ApiError } from "../api/errors.ts";
+import type { Estimate } from "../api/types.ts";
 import type { Context } from "../context.ts";
 import type { CommandSpec, Parsed } from "../lib/args.ts";
-import { buildBody, type InputFlags, localMediaPaths, replaceMedia, routerFor } from "../lib/body.ts";
+import { buildBody, type InputFlags, localMediaPaths, routerFor } from "../lib/body.ts";
 import { ExitCode, UsageError } from "../lib/errors.ts";
+import { needsUploadToPrice, priceNeedsUpload, withPlaceholders } from "../lib/pricing.ts";
 import { unknownFields } from "../lib/schema.ts";
 import { formatUsd } from "../lib/ui.ts";
 import { INPUT_FLAGS, pricingNotes, resolveModel } from "./shared.ts";
@@ -38,14 +40,20 @@ async function estimateCommand(parsed: Parsed, ctx: Context): Promise<number> {
   ui.spin(`Pricing ${modelId}`);
   const model = await resolveModel(ctx, modelId);
   const body = await buildBody(model, { ...flags, prompt: positionalPrompt ?? flags.prompt }, undefined, ctx.cwd);
-  // Files are priced by the fields that describe them (duration, resolution),
-  // not their bytes, so local paths are not uploaded just to get a price.
   const local = localMediaPaths(body);
-  replaceMedia(body, new Map(local.map((p) => [p, `https://upload.invalid/${encodeURIComponent(basename(p))}`])));
-  const result = await ctx.client().estimate(model.id, body, ctx.signal);
+  const priced = withPlaceholders(body, local);
+  let result: Estimate;
+  try {
+    result = await ctx.client().estimate(model.id, priced, ctx.signal);
+  } catch (error) {
+    if (local.length > 0 && error instanceof ApiError && needsUploadToPrice(error)) {
+      throw priceNeedsUpload(error, model.id, body, local);
+    }
+    throw error;
+  }
   ui.stopSpinner();
 
-  const notes = [...unknownFields(routerFor(model), body), ...pricingNotes(body, result)];
+  const notes = [...unknownFields(routerFor(model), priced), ...pricingNotes(priced, result)];
   if (ctx.json) {
     ui.json(notes.length ? { ...result, warnings: notes } : result);
     return ExitCode.Ok;

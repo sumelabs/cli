@@ -16,11 +16,11 @@ export class ApiError extends CliError {
   readonly body: ApiErrorBody;
 
   /** `baseUrl` is the host that answered, for hints that name it. */
-  constructor(status: number, body: ApiErrorBody, requestId?: string, baseUrl?: string) {
+  constructor(status: number, body: ApiErrorBody, requestId?: string, baseUrl?: string, hint?: string) {
     super(body.message || `The API answered ${status}.`, {
       exitCode: exitCodeFor(status, body.code),
       code: body.code,
-      hint: hintFor(status, body, baseUrl),
+      hint: hint ?? hintFor(status, body, baseUrl),
     });
     this.name = "ApiError";
     this.status = status;
@@ -51,6 +51,10 @@ export class ApiError extends CliError {
         ? { error: job.error as { message?: string; retryable?: boolean } }
         : {}),
     };
+  }
+
+  rephrased(message: string, hint: string): ApiError {
+    return new ApiError(this.status, { ...this.body, message }, this.requestId, undefined, hint);
   }
 
   /** Field-level problems from `details.errors[]`, one line each. */
