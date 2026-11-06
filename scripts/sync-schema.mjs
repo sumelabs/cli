@@ -89,10 +89,44 @@ const header = [
 ].join("\n");
 const next = `${header}\n${body}`;
 
+function vendored(text) {
+  const start = text.indexOf("= {");
+  const end = text.lastIndexOf("} as const");
+  try {
+    return JSON.parse(text.slice(start + 2, end + 1));
+  } catch {
+    return {};
+  }
+}
+
+function drift(before, after) {
+  const lines = [];
+  for (const name of Object.keys(after)) {
+    const old = before[name]?.fields ?? {};
+    const now = after[name].fields;
+    const oldModels = new Set(old.model?.enum ?? []);
+    const newModels = new Set(now.model?.enum ?? []);
+    const added = [...newModels].filter((m) => !oldModels.has(m));
+    const gone = [...oldModels].filter((m) => !newModels.has(m));
+    const newFields = Object.keys(now).filter((f) => !(f in old));
+    const goneFields = Object.keys(old).filter((f) => !(f in now));
+    const changed = Object.keys(now).filter(
+      (f) => f in old && f !== "model" && JSON.stringify(old[f]) !== JSON.stringify(now[f]),
+    );
+    if (added.length) lines.push(`- ${name} router: ${added.length} new models: ${added.join(", ")}`);
+    if (gone.length) lines.push(`- ${name} router: ${gone.length} models gone: ${gone.join(", ")}`);
+    if (newFields.length) lines.push(`- ${name} router: ${newFields.length} new fields: ${newFields.join(", ")}`);
+    if (goneFields.length) lines.push(`- ${name} router: ${goneFields.length} fields gone: ${goneFields.join(", ")}`);
+    if (changed.length) lines.push(`- ${name} router: ${changed.length} fields changed: ${changed.join(", ")}`);
+  }
+  return lines;
+}
+
 if (process.argv.includes("--check")) {
   const current = readFileSync(OUT, "utf8");
   if (current !== next) {
-    console.error("src/generated/router-schemas.ts is behind the API's OpenAPI document. Run `npm run sync-schema`.");
+    console.error(`src/generated/router-schemas.ts is behind ${BASE}/v1/openapi.json. Run \`npm run sync-schema\`.`);
+    for (const line of drift(vendored(current), routers)) console.error(line);
     process.exit(1);
   }
   console.log("Router schemas match the API.");

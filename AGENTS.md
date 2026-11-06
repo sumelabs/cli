@@ -51,7 +51,7 @@ npm run sync-schema    # refresh src/generated/router-schemas.ts from the defaul
 
 - `src/cli.ts` holds the command tree, global flags, `SUME_CLI_OUTPUT`, error reporting and exit codes. `src/commands/*.ts` has one command per file, each a `CommandSpec`.
 - `src/api/client.ts` makes every HTTP call (request ids, retries, the `data`/`error` envelope). `src/lib/body.ts` maps flags onto request fields, and `src/lib/field-flags.ts` turns `--<field>` into `--set`.
-- `src/generated/router-schemas.ts` is generated; never edit it by hand. A weekly workflow fails when the API's schema moves.
+- `src/generated/router-schemas.ts` is generated; never edit it by hand. `npm run schema:check` names what moved (models and fields per router). The weekly `Schema drift` workflow opens or updates one issue labeled `schema-drift` when the API's schema moves, and a release refuses stale schemas: sync, PR, then release.
 - `test/helpers/mock-api.ts` is the mock Sume API. Tests never call the real one.
 
 Rules: zero runtime dependencies; erasable TypeScript, local imports end in `.ts`; all output through `ctx.ui` (results to stdout, everything else to stderr); `--json` prints exactly one document, errors included; exit codes in `src/lib/errors.ts` never change meaning; never print a key or a presigned URL. A user-visible change gets a CHANGELOG line under **Unreleased** and README updates. Bump the version in `package.json` and `src/version.ts`.

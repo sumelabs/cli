@@ -45,6 +45,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - run: npm ci
       - run: npm run check
+      - name: Request schemas match the API
+        run: npm run schema:check
 
   build:
     name: Build ${{ matrix.target }}

@@ -16,6 +16,8 @@ export const ROUTER_SCHEMAS = {
           "higgsfield-soul",
           "gpt-image-2.5",
           "gpt-image-2.5-sunburst",
+          "gpt-image-2.6",
+          "gpt-image-2.6-sunburst",
           "gpt-image-2",
           "nano-banana-2.1",
           "nano-banana-pro",
@@ -24,14 +26,13 @@ export const ROUTER_SCHEMAS = {
           "grok-image",
           "seedream-v4",
           "qwen-image",
-          "imagen-4-fast",
-          "imagen-4-ultra",
           "flux-2-pro",
           "flux-2-flex",
           "ideogram-v3",
           "recraft-v4",
           "qwen-image-max",
           "qwen-image-layered",
+          "qwen-image-angles",
           "ideogram-v4.5",
           "nano-banana",
           "flux-kontext-max",
@@ -41,6 +42,7 @@ export const ROUTER_SCHEMAS = {
           "z-image",
           "flux-2-max",
           "kling-image-o1",
+          "kling-image-3-omni",
           "seedream-5-pro",
           "higgsfield-soul-standard",
           "higgsfield-soul-cinema",
@@ -87,6 +89,27 @@ export const ROUTER_SCHEMAS = {
         ],
         "description": "GPT Image 2.5 Flare and Sunburst only."
       },
+      "frame_count": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 16,
+        "description": "GPT Image 2.6 with output_format gif only: frames in the loop (default 9). image_size is each frame's size (default 512x512, or 512 on the long side of aspect_ratio); all frames must fit one OpenAI sheet, which is what is priced."
+      },
+      "frame_duration_ms": {
+        "type": "integer",
+        "minimum": 20,
+        "maximum": 2000,
+        "description": "GPT Image 2.6 with output_format gif only: each frame's delay in ms, rounded to 10 (default 200)."
+      },
+      "complexity": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "description": "GPT Image 2.6 Flare and Sunburst only: how much planning the model does before rendering, separate from quality (default high). Same price. Other models answer 400."
+      },
       "mask_url": {
         "type": "string",
         "format": "uri",
@@ -126,7 +149,10 @@ export const ROUTER_SCHEMAS = {
           "20:9",
           "19.5:9",
           "9:19.5",
-          "9:20"
+          "9:20",
+          "6:10",
+          "14:10",
+          "10:14"
         ],
         "description": "Optional. Per-model native catalog — 4:5 is Instagram portrait, not 4:3. On edit/i2i with image_urls, prefer \"auto\" to match the reference; omit is not auto."
       },
@@ -175,7 +201,7 @@ export const ROUTER_SCHEMAS = {
       },
       "quality": {
         "type": "string",
-        "description": "Model-specific quality hint (gpt-image-2: low|medium|high; GPT Image 2.5: auto|low|medium|high|xhigh|max; ideogram-v3: TURBO|BALANCED|QUALITY; ideogram-v4.5: low|medium|high, default medium)."
+        "description": "Model-specific quality hint (gpt-image-2: low|medium|high; GPT Image 2.5 Flare and Sunburst: auto|low|medium|high|xhigh|max; ideogram-v3: TURBO|BALANCED|QUALITY; ideogram-v4.5: low|medium|high, default medium)."
       },
       "resolution": {
         "type": "string",
@@ -187,7 +213,7 @@ export const ROUTER_SCHEMAS = {
           "720p",
           "1080p"
         ],
-        "description": "Model-specific: nano-banana and imagen-4-ultra use the K tiers; ideogram-v4.5 accepts 1K or 2K; Higgsfield Soul accepts 720p or 1080p."
+        "description": "Model-specific: nano-banana uses the K tiers; ideogram-v4.5 accepts 1K or 2K; Higgsfield Soul accepts 720p or 1080p."
       },
       "rendering_speed": {
         "type": "string",
@@ -200,13 +226,15 @@ export const ROUTER_SCHEMAS = {
       "n": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 4,
-        "deprecated": true
+        "maximum": 10,
+        "deprecated": true,
+        "description": "Alias for num_images. Prefer num_images."
       },
       "num_images": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 4
+        "maximum": 10,
+        "description": "Images to make: 1 to 4. `qwen-image-layered` takes 2 to 10 here, one layer each."
       },
       "output_format": {
         "type": "string",
@@ -214,7 +242,9 @@ export const ROUTER_SCHEMAS = {
           "png",
           "jpeg",
           "jpg",
-          "webp"
+          "webp",
+          "gif",
+          "svg"
         ]
       },
       "format": {
@@ -223,7 +253,9 @@ export const ROUTER_SCHEMAS = {
           "png",
           "jpeg",
           "jpg",
-          "webp"
+          "webp",
+          "gif",
+          "svg"
         ],
         "deprecated": true
       },
@@ -256,6 +288,11 @@ export const ROUTER_SCHEMAS = {
         "minimum": 0,
         "maximum": 30,
         "description": "Blocking wait budget for mode sync or subscribe, in seconds, clamped to 0-30. This bounds how long the HTTP request blocks, not how long the job may take: video, avatar-video, and face-swap jobs routinely outlast it. If no terminal update occurs before the timeout, or the API process has no available waiter capacity, the response is still 2xx and returns the current queued or processing job state with polling URLs. Continue with status_url and honor next_poll_after_seconds; do not submit a second paid job for the same intent."
+      },
+      "project_id": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Optional. A project in this workspace (the Studio project's id) to file the job in, as if it were made inside that project in Studio. The job then shows under that project in Studio and in Usage. An unknown, archived or other-workspace project returns 404 project_not_found before anything is charged."
       }
     }
   },
@@ -270,6 +307,8 @@ export const ROUTER_SCHEMAS = {
         "enum": [
           "higgsfield-genjutsu",
           "higgsfield-genjutsu-object-swap",
+          "higgsfield-genjutsu-light",
+          "higgsfield-genjutsu-light-object-swap",
           "seedance-2.5",
           "seedance-2-mini",
           "seedance-2",
@@ -280,12 +319,20 @@ export const ROUTER_SCHEMAS = {
           "minimax-h3",
           "minimax-h3-max",
           "gemini-omni-flash-1.1",
-          "h3-max-recast",
+          "gemini-omni-flash-1.2",
           "vidu-q4",
           "vidu-q4-reference",
           "veo-3.1",
           "veo-3.1-fast",
           "veo-3.1-lite",
+          "kling-4",
+          "kling-4-omni",
+          "vidu-q3-pro",
+          "vidu-q3-turbo",
+          "vidu-q3",
+          "vidu-q3-mix",
+          "pixverse-c1",
+          "pixverse-v6",
           "wand-vega-1.0-lite",
           "wand-vega-1.0-pro",
           "wand-vega-1.5-pro",
@@ -304,13 +351,11 @@ export const ROUTER_SCHEMAS = {
           "higgsfield-cinema-studio-4",
           "veed-fabric-1.0",
           "veed-fabric-1.0-fast",
-          "minimax-h3-max-lip-sync",
           "kling-avatar-2.0-pro",
           "kling-avatar-2.0",
           "infinitalk",
           "omnihuman-1.5",
           "omnihuman-2",
-          "creatify-aurora",
           "wan-2.2-speech-to-video",
           "sync-lipsync-3",
           "sync-lipsync-2-pro",
@@ -322,6 +367,12 @@ export const ROUTER_SCHEMAS = {
           "pixverse-lipsync",
           "veed-subtitles",
           "veed-dubbing",
+          "topaz-video",
+          "sam-3-video",
+          "luma-ray-2-flash-reframe",
+          "sumelabs/depth-anything-video",
+          "sumelabs/depth-anything-v3-video",
+          "sumelabs/wand",
           "auto-",
           "sume/auto",
           "auto"
@@ -331,7 +382,7 @@ export const ROUTER_SCHEMAS = {
       "prompt": {
         "type": "string",
         "minLength": 1,
-        "description": "Text prompt for the selected Video Router model. Optional on `auto-` / `sume/auto` / `auto` and on h3-max-recast (at most 2000 characters there: who becomes whom, or what else to keep or change)."
+        "description": "Text prompt for the selected Video Router model. Optional on `auto-` / `sume/auto` / `auto`."
       },
       "task": {
         "type": "string",
@@ -362,7 +413,7 @@ export const ROUTER_SCHEMAS = {
       "video_url": {
         "type": "string",
         "format": "uri",
-        "description": "Source clip for video-to-video models. gemini-omni-flash-1.1 (edit): the prompt describes the edit, resolution is optional (default 720p), aspect_ratio is rejected and duration is not sent to the provider (a duration, if given, is only the reserve-estimate hint); cannot be combined with image_url / end_image_url / reference_*_urls — use reference_video_urls when the clip should condition a fresh generation instead. h3-max-recast (person swap), higgsfield-genjutsu (Motion Transfer) and higgsfield-genjutsu-object-swap (Object Swap) require video_url together with reference_image_urls (h3-max-recast: 1–4, one photo per new person; a 5–30 s source with no shot over 15 s) and the inspected source duration; output keeps the source length."
+        "description": "Source clip for video-to-video models. gemini-omni-flash-1.1 (edit): the prompt describes the edit, resolution is optional (default 720p), aspect_ratio is rejected and duration is not sent to the provider and does not set the price: an edit is charged for the clip's length read from the file, rounded up, at least 3 s and at most 10 s, at the output rate, plus a per-second source fee for up to 10 s (an unreadable clip is charged 10 s); cannot be combined with image_url / end_image_url / reference_*_urls — use reference_video_urls when the clip should condition a fresh generation instead. higgsfield-genjutsu (Motion Transfer) and higgsfield-genjutsu-object-swap (Object Swap) require video_url together with reference_image_urls and the inspected source duration; output keeps the source length. They are charged for every second of the source read from the file, rounded up (an unreadable clip is charged 30 s); duration is still checked but does not set the price."
       },
       "audio_url": {
         "type": "string",
@@ -388,7 +439,7 @@ export const ROUTER_SCHEMAS = {
       },
       "captions": {
         "type": "object",
-        "description": "Caption models only (veed-subtitles): burns styled lines into video_url. duration is required: the clip's length in whole seconds (2-600, billed for at least 60). resolution is the source's size, 1080p or 4K (above 1080p, the default).",
+        "description": "Caption models only (veed-subtitles): burns styled lines into video_url. duration is required: the clip's length in whole seconds (2-600, billed for at least 60). resolution is 1080p, the default.",
         "required": [
           "style"
         ],
@@ -420,24 +471,86 @@ export const ROUTER_SCHEMAS = {
               "max"
             ],
             "description": "How strong the shadow behind the lines is. Omit it to keep the style's own."
-          },
-          "color": {
-            "type": "string",
-            "pattern": "^#([0-9A-Fa-f]{3}){1,2}$",
-            "description": "The words' colour as a hex value. Omit it to keep the style's own."
-          },
-          "highlight_color": {
-            "type": "string",
-            "pattern": "^#([0-9A-Fa-f]{3}){1,2}$",
-            "description": "The emphasised words' colour, on styles that have a second text colour (glide, glide2, fusion, handwritten, backdrop, backdrop2)."
           }
         }
+      },
+      "upscale": {
+        "type": "object",
+        "description": "topaz-video only: upscales video_url, raises its frame rate, or both. resolution is the output's size (720p, 1080p or 4K for anything above 1080p, the default). duration is required: the clip's length in whole seconds, rounded up (2-60). Billed twice above 30 fps, and when fps is unsent.",
+        "required": [],
+        "properties": {
+          "factor": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4,
+            "description": "How many times larger each side gets (default 2). Send 1 with fps for a frame-rate boost only."
+          },
+          "fps": {
+            "type": "integer",
+            "minimum": 16,
+            "maximum": 60,
+            "description": "The output frame rate; the frames in between are interpolated. Omit it to keep the clip's own rate."
+          },
+          "model": {
+            "type": "string",
+            "description": "The Topaz enhancement model (default Proteus; see the model's catalog constraints)."
+          }
+        }
+      },
+      "background": {
+        "type": "object",
+        "description": "sam-3-video only: removes video_url's background, keeping what prompt names (such as the person). duration is required: the clip's length in whole seconds, rounded up (2-60).",
+        "required": [],
+        "properties": {
+          "output": {
+            "type": "string",
+            "enum": [
+              "cutout",
+              "mask"
+            ],
+            "description": "cutout (default): the subject alone; mask: its mask."
+          }
+        }
+      },
+      "depth": {
+        "type": "object",
+        "description": "sumelabs/depth-anything-v3-video only: how the depth map of video_url is drawn. duration is the clip's length in whole seconds, rounded up: required on sumelabs/depth-anything-video and sumelabs/depth-anything-v3-video (1-600); sumelabs/wand (WAND) reads it from video_url when left out (2-600) and takes no depth options.",
+        "required": [],
+        "properties": {
+          "colormap": {
+            "type": "string",
+            "enum": [
+              "grayscale",
+              "inferno",
+              "turbo"
+            ],
+            "description": "grayscale (default; near is white, far is black), inferno or turbo."
+          }
+        }
+      },
+      "extend": {
+        "type": "boolean",
+        "description": "seedance-2.5 only, with video_url: continue the clip instead of editing it. duration (4-30) is the length of the new part; the prompt says what happens next."
+      },
+      "source_duration": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 30,
+        "description": "seedance-2.5 with extend only: the length of video_url in whole seconds, rounded up. It prices the clip the model reads; unsent, the clip is priced as 15 s."
+      },
+      "draft": {
+        "type": "boolean",
+        "description": "seedance-2.5 only: a 480p draft at the 480p price. duration is required; video_url is not accepted. Finish a draft you keep with draft_job_id."
+      },
+      "draft_job_id": {
+        "type": "string",
+        "description": "seedance-2.5 only: the id of a completed draft job in this workspace. Makes the same scene at 1080p, priced as 1080p for the draft's length. Send only model, draft_job_id and optionally resolution 1080p; the prompt, references, duration and aspect ratio come from the draft. A draft can be finished for 14 days after it is made; after that the request answers 410 draft_expired."
       },
       "reference_image_urls": {
         "type": "array",
         "minItems": 1,
-        "maxItems": 10,
-        "description": "Reference images. On h3-max-recast these are the 1–4 people swapped into video_url (one photo per person, left to right by default); on higgsfield-genjutsu and higgsfield-genjutsu-object-swap, 1–8 Genjutsu references.",
+        "maxItems": 30,
+        "description": "Reference images. seedance-2.5 takes up to 30 (50 reference files in all); most other models up to 9 or 10. On higgsfield-genjutsu and higgsfield-genjutsu-object-swap, 1–8 Genjutsu references.",
         "items": {
           "type": "string",
           "format": "uri"
@@ -446,8 +559,8 @@ export const ROUTER_SCHEMAS = {
       "reference_video_urls": {
         "type": "array",
         "minItems": 1,
-        "maxItems": 5,
-        "description": "Reference clips that condition a fresh generation (not the edit source — see video_url). gemini-omni-flash-1.1 accepts at most 3, each at most 3 seconds; address them in the prompt as <VIDEO_REF_0>, <VIDEO_REF_1>, ... (0-based, list order).",
+        "maxItems": 10,
+        "description": "Reference clips that condition a fresh generation (not the edit source — see video_url). seedance-2.5 takes up to 10, at most 30.2 seconds in all; most other models up to 3 or 5. gemini-omni-flash-1.1 accepts at most 3, each at most 3 seconds; address them in the prompt as <VIDEO_REF_0>, <VIDEO_REF_1>, ... (0-based, list order).",
         "items": {
           "type": "string",
           "format": "uri"
@@ -456,7 +569,7 @@ export const ROUTER_SCHEMAS = {
       "reference_audio_urls": {
         "type": "array",
         "minItems": 1,
-        "maxItems": 5,
+        "maxItems": 10,
         "items": {
           "type": "string",
           "format": "uri"
@@ -467,20 +580,32 @@ export const ROUTER_SCHEMAS = {
         "enum": [
           "360p",
           "480p",
+          "540p",
           "720p",
           "768p",
           "1080p",
           "2K",
           "4K",
-          "4k"
+          "4k",
+          "8K"
         ],
-        "description": "Defaults to provider/runtime defaults when omitted (typically 720p; MiniMax H3 / H3 Max and h3-max-recast default to 768p). Each model takes only the resolutions its catalog row lists in capabilities.resolutions — higgsfield-genjutsu, higgsfield-genjutsu-object-swap, seedance-2.5, seedance-2, wan-3.0, wan-3.0-prime: 480p, 720p, 1080p; seedance-2-mini, seedance-2-fast, grok-imagine-video-1.5, higgsfield-cinema-studio-4, veed-fabric-1.0, veed-fabric-1.0-fast, infinitalk, creatify-aurora, infinitalk-video: 480p, 720p; kling-3, kling-2.6: 1080p; minimax-h3: 480p, 768p, 2K, 4K; minimax-h3-max, minimax-h3-max-lip-sync: 480p, 768p, 1080p; gemini-omni-flash-1.1: 360p, 720p, 1080p, 4K; h3-max-recast, hailuo-2.3, hailuo-2.3-fast: 768p, 1080p; vidu-q4, vidu-q4-reference, veo-3.1, veo-3.1-fast, veo-3.1-lite, kling-3-turbo, kling-3-omni, happy-horse-1.0, happy-horse-1.1, omnihuman-1.5: 720p, 1080p; wand-vega-1.0-lite: 768p, 1080p, 2K, 4K; wand-vega-1.0-pro, wand-vega-1.5-pro, mingmou-1, hunyuan-1.5: 720p, 1080p, 2K, 4K; hailuo-h3-regen: 2K; heygen-video-1: 480p, 768p, 2K; kling-avatar-2.0-pro, kling-avatar-2.0, omnihuman-2, sync-lipsync-3, sync-lipsync-2-pro, sync-lipsync-2, kling-lipsync, latentsync, veed-lipsync, pixverse-lipsync, veed-dubbing: ; wan-2.2-speech-to-video: 480p, 580p, 720p; veed-subtitles: 1080p, 4K. Aliases: kling-3 also accept 720p (renders 1080p); minimax-h3, gemini-omni-flash-1.1, wand-vega-1.0-lite, wand-vega-1.0-pro, wand-vega-1.5-pro, mingmou-1, hunyuan-1.5, veed-subtitles also accept 4k (renders 4K). 768p is MiniMax H3 / H3 Max native; minimax-h3-max 1080p is latent refinement from native 768p, and minimax-h3 2K / 4K are 768p upscales."
+        "description": "Defaults to provider/runtime defaults when omitted (typically 720p; MiniMax H3 / H3 Max default to 768p). Each model takes only the resolutions its catalog row lists in capabilities.resolutions — higgsfield-genjutsu, higgsfield-genjutsu-object-swap, higgsfield-genjutsu-light, higgsfield-genjutsu-light-object-swap, seedance-2.5, wan-3.0, wan-3.0-prime: 480p, 720p, 1080p; seedance-2-mini, seedance-2-fast, grok-imagine-video-1.5, higgsfield-cinema-studio-4, veed-fabric-1.0, veed-fabric-1.0-fast, infinitalk, wan-2.2-speech-to-video, infinitalk-video: 480p, 720p; seedance-2: 480p, 720p, 1080p, 4K; kling-3, kling-2.6, veed-subtitles: 1080p; minimax-h3: 768p, 2K, 4K; minimax-h3-max: 480p, 768p, 1080p; gemini-omni-flash-1.1, gemini-omni-flash-1.2: 360p, 720p, 1080p, 4K; vidu-q4, vidu-q4-reference: 540p, 720p, 1080p, 2K, 4K; veo-3.1, veo-3.1-fast, veo-3.1-lite, kling-4, kling-4-omni, vidu-q3-pro, vidu-q3-mix, kling-3-turbo, kling-3-omni, happy-horse-1.0, happy-horse-1.1: 720p, 1080p; vidu-q3-turbo, vidu-q3: 540p, 720p, 1080p; pixverse-c1, pixverse-v6: 360p, 540p, 720p, 1080p; wand-vega-1.0-lite: 768p, 1080p, 2K, 4K; wand-vega-1.0-pro, wand-vega-1.5-pro, mingmou-1, hunyuan-1.5: 720p, 1080p, 2K, 4K; hailuo-h3-regen: 2K; heygen-video-1: 480p, 768p, 1080p, 2K; hailuo-2.3, hailuo-2.3-fast: 768p, 1080p; kling-avatar-2.0-pro, kling-avatar-2.0, omnihuman-2, sync-lipsync-3, sync-lipsync-2-pro, sync-lipsync-2, kling-lipsync, latentsync, veed-lipsync, pixverse-lipsync, veed-dubbing, sam-3-video, luma-ray-2-flash-reframe, sumelabs/depth-anything-video, sumelabs/depth-anything-v3-video: ; omnihuman-1.5: 720p; topaz-video: 720p, 1080p, 4K; sumelabs/wand: 720p, 1080p, 2K, 4K, 8K. Aliases: seedance-2, minimax-h3, gemini-omni-flash-1.1, gemini-omni-flash-1.2, vidu-q4, vidu-q4-reference, wand-vega-1.0-lite, wand-vega-1.0-pro, wand-vega-1.5-pro, mingmou-1, hunyuan-1.5, topaz-video, sumelabs/wand also accept 4k (renders 4K); kling-3 also accept 720p (renders 1080p). 768p is MiniMax H3 / H3 Max native; minimax-h3-max 1080p is latent refinement from native 768p, and minimax-h3 2K / 4K are 768p upscales. sumelabs/wand (WAND depth) is priced by the clip's size, 720p, 1080p, 2K, 4K or 8K by its shorter side, which the API reads from video_url; send resolution only when the file cannot be read."
       },
       "duration": {
-        "type": "integer",
-        "minimum": 2,
-        "maximum": 600,
-        "description": "Requested clip duration in seconds. wan-3.0 accepts 2-30; seedance-2.5 accepts 4-30; MiniMax H3 / H3 Max accept 5-15; gemini-omni-flash-1.1 accepts 3-10 (default 8; ignored by the provider on edit); h3-max-recast requires the inspected source length, 5-30 (rounded up; reserve-only, output keeps the source length); higgsfield-genjutsu and higgsfield-genjutsu-object-swap require the source length, 4-30; veo-3.1 / veo-3.1-fast / veo-3.1-lite accept 4, 6 or 8 (default 8); WAND-Vega 1.0 Lite / 1.0 Pro / 1.5 Pro accept 4-15 (default 5); mingmou-1 accepts 5 or 10; hunyuan-1.5 accepts 5; hailuo-h3-regen requires the source length, 5-16 (rounded up; reserve-only, output keeps the source length); heygen-video-1 accepts 5-15 (default 5); lipsync models require the clip's length (the audio's, for an image row), each within its catalog range, up to 60; veed-subtitles and veed-dubbing require the source clip's length, 2-600; every other model is capped at 15."
+        "oneOf": [
+          {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
+          },
+          {
+            "type": "string",
+            "enum": [
+              "auto"
+            ]
+          }
+        ],
+        "description": "Requested clip duration in seconds. wan-3.0 accepts 2-30; seedance-2.5 accepts 4-30; MiniMax H3 / H3 Max accept 5-15; gemini-omni-flash-1.1 accepts 3-10 (default 8; ignored by the provider on edit); higgsfield-genjutsu and higgsfield-genjutsu-object-swap require the source length, 4-30; veo-3.1 / veo-3.1-fast / veo-3.1-lite accept 4, 6 or 8 (default 8); WAND-Vega 1.0 Lite / 1.0 Pro / 1.5 Pro accept 4-15 (default 5); mingmou-1 accepts 5 or 10; hunyuan-1.5 accepts 5; hailuo-h3-regen requires the source length, 5-16 (rounded up; reserve-only, output keeps the source length); heygen-video-1 accepts 5-30 or auto (default 5; over 15 s for text or a first frame only); lipsync models require the clip's length (the audio's, for an image row), each within its catalog range, up to 60; veed-subtitles and veed-dubbing require the source clip's length, 2-600; topaz-video, sam-3-video and depth-anything-video require the source clip's length, 2-60; luma-ray-2-flash-reframe requires it, 2-10; every other model is capped at 15."
       },
       "duration_seconds": {
         "type": "integer",
@@ -622,9 +747,15 @@ export const ROUTER_SCHEMAS = {
           "async",
           "sync",
           "subscribe",
-          "webhook"
+          "webhook",
+          "text_to_video",
+          "image_to_video",
+          "reference_to_video",
+          "t2v",
+          "i2v",
+          "ref2va"
         ],
-        "description": "How the client learns the outcome. Every mode returns the job id in the first response. async (the default) returns immediately with polling URLs. sync and subscribe are aliases for the same bounded wait: they block for at most wait_timeout_seconds (max 30) when waiter capacity is available, and are not a long-lived subscription, an event stream, or a progress feed. webhook returns immediately and stores a callback for terminal delivery only. Prefer async or webhook for new integrations; for waits longer than 30 seconds, submit with async and poll status_url from the client. Note that `subscribe` here is unrelated to the SDK's subscribeFormatRun (a client-side poll loop) and to a run's communication.mode, whose only values are async and webhook."
+        "description": "How the client learns the outcome. Every mode returns the job id in the first response. async (the default) returns immediately with polling URLs. sync and subscribe are aliases for the same bounded wait: they block for at most wait_timeout_seconds (max 30) when waiter capacity is available, and are not a long-lived subscription, an event stream, or a progress feed. webhook returns immediately and stores a callback for terminal delivery only. Prefer async or webhook for new integrations; for waits longer than 30 seconds, submit with async and poll status_url from the client. Note that `subscribe` here is unrelated to the SDK's subscribeFormatRun (a client-side poll loop) and to a run's communication.mode, whose only values are async and webhook. On heygen-video-1, HeyGen's generation modes text_to_video, image_to_video and reference_to_video (or t2v, i2v, ref2va) are accepted here too and must match the inputs; the job then runs async."
       },
       "webhook_url": {
         "type": "string",
@@ -637,6 +768,178 @@ export const ROUTER_SCHEMAS = {
         "minimum": 0,
         "maximum": 30,
         "description": "Blocking wait budget for mode sync or subscribe, in seconds, clamped to 0-30. This bounds how long the HTTP request blocks, not how long the job may take: video, avatar-video, and face-swap jobs routinely outlast it. If no terminal update occurs before the timeout, or the API process has no available waiter capacity, the response is still 2xx and returns the current queued or processing job state with polling URLs. Continue with status_url and honor next_poll_after_seconds; do not submit a second paid job for the same intent."
+      },
+      "project_id": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Optional. A project in this workspace (the Studio project's id) to file the job in, as if it were made inside that project in Studio. The job then shows under that project in Studio and in Usage. An unknown, archived or other-workspace project returns 404 project_not_found before anything is charged."
+      },
+      "prompt_enhancement": {
+        "type": "string",
+        "enum": [
+          "turbo",
+          "quality",
+          "ultraquality",
+          "disabled",
+          "default"
+        ],
+        "description": "heygen-video-1 only: HeyGen's prompt enhancement. turbo is fastest, quality (HeyGen's default) is balanced, ultraquality is slowest and best, disabled sends the prompt as written; default is HeyGen's alias for turbo. Over 15 s needs turbo, quality or default."
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+        "description": "heygen-video-1 only: HeyGen's generation seed (unsigned 32-bit). The same prompt and seed return the same clip; random when omitted. Every other model refuses it."
+      },
+      "end_user_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "heygen-video-1 only: HeyGen's opaque end-user id (1–128 characters, no spaces, no personal data), forwarded for HeyGen's usage attribution and abuse checks. It does not change the price."
+      },
+      "callback_id": {
+        "type": "string",
+        "maxLength": 256,
+        "description": "heygen-video-1 only: HeyGen's client tracking id. Sume stores it as metadata.callback_id, which the job and its webhook echo."
+      },
+      "image": {
+        "oneOf": [
+          {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "url",
+                  "asset_id",
+                  "base64"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 2048
+              }
+            }
+          }
+        ],
+        "description": "heygen-video-1 only: HeyGen's name for image_url, the first frame (image_to_video)."
+      },
+      "reference_images": {
+        "type": "array",
+        "maxItems": 9,
+        "description": "heygen-video-1 only: HeyGen's name for reference_image_urls (up to 9; <Picture 1>, <Picture 2>… in the prompt).",
+        "items": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            },
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "url",
+                    "asset_id",
+                    "base64"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "maxLength": 2048
+                }
+              }
+            }
+          ],
+          "description": "An https URL, or HeyGen's {\"type\":\"url\",\"url\":\"https://…\"}. HeyGen's asset_id and base64 forms name files inside HeyGen's own workspace: upload with POST /v1/assets and send the URL instead (a 400 says so)."
+        }
+      },
+      "reference_videos": {
+        "type": "array",
+        "maxItems": 3,
+        "description": "heygen-video-1 only: HeyGen's name for reference_video_urls (up to 3, sharing a 15 s budget; <Video 1>… in the prompt).",
+        "items": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            },
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "url",
+                    "asset_id",
+                    "base64"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "maxLength": 2048
+                }
+              }
+            }
+          ],
+          "description": "An https URL, or HeyGen's {\"type\":\"url\",\"url\":\"https://…\"}. HeyGen's asset_id and base64 forms name files inside HeyGen's own workspace: upload with POST /v1/assets and send the URL instead (a 400 says so)."
+        }
+      },
+      "reference_audio": {
+        "type": "array",
+        "maxItems": 3,
+        "description": "heygen-video-1 only: HeyGen's name for reference_audio_urls (up to 3; a voice line here is spoken with lip-sync).",
+        "items": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            },
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "url",
+                    "asset_id",
+                    "base64"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "maxLength": 2048
+                }
+              }
+            }
+          ],
+          "description": "An https URL, or HeyGen's {\"type\":\"url\",\"url\":\"https://…\"}. HeyGen's asset_id and base64 forms name files inside HeyGen's own workspace: upload with POST /v1/assets and send the URL instead (a 400 says so)."
+        }
       }
     }
   }

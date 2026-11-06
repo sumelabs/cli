@@ -93,6 +93,13 @@ export function expandFieldFlags(
     if (top === "model") {
       throw new UsageError(`--${name}: the model is the first argument, not a flag.`, `sume ${command.name} <model> …`);
     }
+    const elsewhere = router && !field ? (router === "image" ? "video" : "image") : undefined;
+    if (elsewhere && routerSchema(elsewhere).fields[top] && !isCliOwned(top)) {
+      throw new UsageError(
+        `--${name} is a field of ${elsewhere} models; ${model} is ${router === "image" ? "an image" : "a video"} model, so its endpoint does not take it.`,
+        `See what ${model} takes: sume schema ${model}`,
+      );
+    }
     if (!field || isCliOwned(top)) {
       // Not a field either: a near miss gets the closest flag or field.
       const candidates = [

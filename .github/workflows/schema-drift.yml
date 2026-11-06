@@ -1,8 +1,5 @@
 name: Schema drift
 
-# The CLI ships the router request schemas from the API's OpenAPI document
-# (src/generated/router-schemas.ts). This fails when the API has moved on, so
-# a maintainer runs `npm run sync-schema` and releases.
 on:
   schedule:
     - cron: "17 6 * * 1"
@@ -10,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   check:
@@ -19,4 +17,27 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - run: npm run schema:check
+      - id: check
+        run: npm run --silent schema:check 2> drift.txt || { cat drift.txt; echo "drift=1" >> "$GITHUB_OUTPUT"; }
+      - name: Open or update the drift issue
+        if: steps.check.outputs.drift == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create schema-drift --color d93f0b --description "The CLI's request schemas are behind the API" 2>/dev/null || true
+          {
+            echo "The weekly check found \`src/generated/router-schemas.ts\` behind the API's OpenAPI document. Until it is synced, \`sume\` misses new models in \`sume schema\`, refuses their \`--<field>\` flags, and warns about real fields."
+            echo
+            echo '```'
+            cat drift.txt
+            echo '```'
+            echo
+            echo "Fix: run \`npm run sync-schema\`, open a PR, then release. A release refuses stale schemas. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > body.md
+          number=$(gh issue list --label schema-drift --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file body.md
+          else
+            gh issue create --title "Request schemas are behind the API" --label schema-drift --body-file body.md
+          fi
+          exit 1
