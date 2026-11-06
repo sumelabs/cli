@@ -17,6 +17,11 @@ All notable changes to this project are documented here. The format follows
 - `auth status` shows the workspace and its balance (`workspace` and `balance` in `--json`). `doctor` names the workspace and adds a `Balance` check that warns when there is nothing to spend.
 - `run` and `upload` say when the key comes from `./.env`, and which workspace it bills.
 
+### Changed
+
+- `--version` prints the version at any depth (`sume run --version`), as `--help` does. `--help` wins when both are given.
+- The command names sume.com/docs/cli uses work: `sume catalog list` runs `sume models` (with a note), `sume models list` lists every model instead of filtering by "list", and `sume jobs result <job>` is `sume jobs get <job>`.
+
 ### Fixed
 
 - A run whose price depends on a local file (lip-sync speech, a reference clip) is priced from the uploaded file: `run` uploads it first, then checks `--max-usd`, instead of refusing with "the price cannot be checked". `estimate` and `run --dry-run` name the file and the `sume upload` command, instead of the API's "host name does not exist" for a placeholder the CLI made up. Exit codes and error codes are unchanged.

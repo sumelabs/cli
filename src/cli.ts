@@ -8,7 +8,7 @@ import { doctor } from "./commands/doctor.ts";
 import { estimate } from "./commands/estimate.ts";
 import { jobs } from "./commands/jobs.ts";
 import { login, logout, workspaces } from "./commands/login.ts";
-import { models } from "./commands/models.ts";
+import { catalog, models } from "./commands/models.ts";
 import { run } from "./commands/run.ts";
 import { renderInputs, schema, vendoredRouter } from "./commands/schema.ts";
 import { update } from "./commands/update.ts";
@@ -105,6 +105,7 @@ export const root: CommandSpec = {
     estimate,
     upload,
     models,
+    catalog,
     schema,
     jobs,
     balance,
@@ -181,7 +182,7 @@ export async function main(options: MainOptions): Promise<number> {
   });
 
   try {
-    if (flags.version === true && parsed.path.length === 0) {
+    if (flags.version === true && flags.help !== true) {
       const info = versionInfo();
       if (json) ui.json(info);
       else ui.out(`sume ${VERSION}`);

@@ -164,7 +164,7 @@ export function parse(root: CommandSpec, argv: readonly string[]): Parsed {
   }
 
   const command = leaf();
-  checkArgs(command, args, path, flags.help === true);
+  checkArgs(command, args, path, flags.help === true || flags.version === true);
   return { command, path, args, flags };
 }
 

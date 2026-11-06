@@ -166,7 +166,7 @@ Try it
 | `update` | Update a standalone install to the latest release |
 | `version` | Print the version |
 
-Every command has `--help`. Global flags work anywhere: `--json`, `--quiet`, `--verbose` (each API call with its request id), `--no-color`, `--api-key` and `--base-url`.
+Older names keep working: `sume catalog list` runs `sume models`, `sume models list` lists them all, and `sume jobs result <job>` is `sume jobs get`. Every command has `--help`, and `--version` works at any depth. Global flags work anywhere: `--json`, `--quiet`, `--verbose` (each API call with its request id), `--no-color`, `--api-key` and `--base-url`.
 
 ### run
 
