@@ -81,12 +81,19 @@ async function accountGet(ctx: Context): Promise<number> {
   const { c } = ui;
   const row = (label: string, value: string) => ui.out(`${c.dim(label.padEnd(11))}${value}`);
   row("Workspace", `${workspace ? workspaceLabel(workspace) : "—"} ${c.dim(account.workspace_id)}`);
+  const signIn =
+    Boolean(ctx.settings.session) ||
+    account.auth_source === "mcp_oauth" ||
+    Boolean(account.api_key?.id?.startsWith("mcp_oauth_token_"));
   if (account.api_key) {
-    const name = account.api_key.name ? `${account.api_key.name} ` : "";
-    row("Key", `${name}${c.dim(`${account.api_key.prefix}…`)}`);
+    if (signIn) row("Key", "Sume sign-in");
+    else {
+      const name = account.api_key.name ? `${account.api_key.name} ` : "";
+      row("Key", `${name}${c.dim(`${account.api_key.prefix}…`)}`);
+    }
     row("Scopes", account.api_key.scopes.join(", ") || "—");
   }
-  row("Signed in", account.auth_source === "mcp_oauth" ? "with Sume (sume login)" : "with an API key");
+  row("Signed in", signIn ? "with Sume (sume login)" : "with an API key");
   return ExitCode.Ok;
 }
 

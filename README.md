@@ -86,13 +86,13 @@ sume run gpt-image-2 "a red kite over a beach" -q low -o out/   # prints the sav
 
 The key comes from `SUME_API_KEY` or `./.env`; a person makes it at sume.com → Settings → API keys. The host needs nothing. `sume agent` prints the page `init` writes, followed by every model with its price per image or second.
 
-**1. Get a key.** Sign in at [sume.com](https://www.sume.com/dashboard/api-keys), open **Settings → API keys**, and create one. Then save it:
+**1. Sign in.** Use the same Sume sign-in as the hosted MCP:
 
 ```sh
-sume auth login        # paste the key; it is checked, then stored for your user only
+sume login             # a browser opens; choose Allow. Over SSH or with no browser: sume login --device
 ```
 
-Or export it for the current shell instead: `export SUME_API_KEY="sume_live_..."`.
+Or use an API key: make one at [sume.com → Settings → API keys](https://www.sume.com/dashboard/api-keys), then `sume auth login` (paste it; it is checked, then stored for your user only), or `export SUME_API_KEY="sume_live_..."` for the current shell.
 
 **2. Make an image.** This one costs under a cent:
 
@@ -155,6 +155,9 @@ Try it
 | [`balance`](#account) | What the workspace can spend, in dollars and credits |
 | [`usage`](#account) | What recent jobs cost (`usage list`; `usage get` works too) |
 | [`account`](#account) | The workspace and key in use (`account get`, or `me`) |
+| [`workspaces`](#login) | List your workspaces, and switch the one a sign-in works in |
+| [`login`](#login) | Sign in with Sume (browser or `--device` code), or save an API key |
+| [`logout`](#login) | Revoke the sign-in and forget the saved key |
 | [`agent`](#agent) | One page for an agent: setup, how to run, every model and its price |
 | [`init`](#agent) | Write that page into the project: AGENTS.md, a Claude skill, a Cursor rule |
 | [`auth`](#auth) | Save, check or forget your key |
@@ -288,6 +291,20 @@ sume balance --json | jq -r .balance.available_usd
 
 A key belongs to one workspace, so these show where runs are billed and what is left before you spend. `auth status` and `doctor` show the same workspace and balance. When the key comes from `./.env`, `run` and `upload` say so, and name the workspace it bills.
 
+### login
+
+```sh
+sume login                                  # browser sign-in, the same one the hosted MCP uses
+sume login --device                         # a code to approve on any device: SSH, CI, an agent's machine
+printenv SUME_API_KEY | sume login --with-key   # save an API key instead (sume login --api-key <KEY> works too)
+sume workspaces list                        # your personal workspace and teams; * marks the one in use
+sume workspaces select "Acme Team"          # runs bill that workspace from now on (by id or exact name)
+sume auth token                             # a current access token, for a script that calls the API itself
+sume logout                                 # revoke the sign-in, and forget it and any saved key
+```
+
+A sign-in keeps a one-hour access token and a refresh token in the config file (mode `0600`), and refreshes on its own. Parallel commands share one refresh. The token is asked for `https://api.sume.com` only (or the host you sign in for, with `--base-url`), so it is never sent to another host. With no terminal (CI, an agent), `sume login` prints a code to approve instead of opening a browser. A sign-in can switch workspaces; an API key always works in the workspace it was made in. `SUME_API_KEY`, `--api-key` and `./.env` still win over a sign-in.
+
 ### auth
 
 ```sh
@@ -380,12 +397,13 @@ curl -fsSL https://raw.githubusercontent.com/sumelabs/cli/main/skills/sume/SKILL
 
 | Setting | Flag | Environment | Saved in config |
 |---|---|---|---|
-| API key | `--api-key` | `SUME_API_KEY`, or that line in `./.env` | `sume auth login` |
-| API host | `--base-url` | `SUME_API_BASE_URL` | `sume auth login --base-url …` |
+| API key | `--api-key` | `SUME_API_KEY`, or that line in `./.env` | `sume auth login`, `sume login --with-key` |
+| Sume sign-in | | | `sume login` (browser or `--device`) |
+| API host | `--base-url` | `SUME_API_BASE_URL` | `sume auth login --base-url …`, `sume login --base-url …` |
 | Output | `--json` | `SUME_CLI_OUTPUT=json` (or `auto`) | |
 | Spend cap per run | `--max-usd` | `SUME_CLI_MAX_USD` | |
 
-A flag beats the environment, which beats `./.env`, which beats the config file. From `./.env` the CLI reads `SUME_API_KEY` and nothing else: the API host never comes from a project file, so a cloned repo cannot send your saved key elsewhere. The config file is `~/.config/sume/config.json` (`$XDG_CONFIG_HOME` is honored, `%APPDATA%\sume` on Windows, or `$SUME_CLI_CONFIG_DIR`). It is created readable by your user only. The key in it is not encrypted, so treat it like an SSH key, or use `SUME_API_KEY` instead.
+A flag beats the environment, which beats `./.env`, which beats the config file, where a Sume sign-in is used before a saved key. From `./.env` the CLI reads `SUME_API_KEY` and nothing else: the API host never comes from a project file, so a cloned repo cannot send your saved key elsewhere. The config file is `~/.config/sume/config.json` (`$XDG_CONFIG_HOME` is honored, `%APPDATA%\sume` on Windows, or `$SUME_CLI_CONFIG_DIR`). It is created readable by your user only. The key in it is not encrypted, so treat it like an SSH key, or use `SUME_API_KEY` instead.
 
 Color follows the terminal; `NO_COLOR=1` or `--no-color` turns it off and `FORCE_COLOR=1` turns it on. Completion caches model ids for a day under `~/.cache/sume`.
 
@@ -429,7 +447,10 @@ sume run  ──▶  POST /v1/{image,video}-router/generate   202 + job id, with
 
 | You see | What to do |
 |---|---|
-| `No API key` (exit 3) | `sume auth login`, or export `SUME_API_KEY`. |
+| `No API key or Sume sign-in` (exit 3) | `sume login`, or export `SUME_API_KEY`. |
+| `login_required` (exit 3) | The sign-in expired or was revoked. `sume login` again. |
+| `This Sume sign-in can only read` (exit 3) | The sign-in was allowed without **Create and spend credits**. Run `sume login` again and keep it on. |
+| `workspace_fixed` (exit 4) | An API key works in its own workspace only. `sume login` signs in with Sume, which can switch. |
 | `Missing or invalid API key` (exit 3) | The key is wrong, revoked, or made for the other [API host](#api-hosts). The error names the host to try; otherwise create a new key at sume.com → Settings → API keys. |
 | `The API key contains spaces, line breaks…` (exit 3) | The key was pasted with extra characters. Copy it again. |
 | `open_key_route_not_allowed` (exit 3) | Sume API keys call images, video, jobs and prices only. |

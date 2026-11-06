@@ -678,7 +678,7 @@ describe("agent", () => {
 
   it("tells a person with no key where to start, and lists install lines in --help --json", async () => {
     expect((await cli(["--help"], { key: null })).stdout).toContain(
-      "No key yet: a person makes one at https://www.sume.com/dashboard/api-keys",
+      "Not signed in: run `sume login`, or make a key at https://www.sume.com/dashboard/api-keys",
     );
     expect((await cli(["--help"])).stdout).not.toContain("No key yet");
     const manifest = (await cli(["--help", "--json"], { key: null })).json<{ install: { sh: string }; env: object }>();

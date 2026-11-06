@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/sumelabs/cli/main/install.sh | sh
 
 Windows: `irm https://raw.githubusercontent.com/sumelabs/cli/main/install.ps1 | iex`. No install, with Node 22+: put `npx -y https://github.com/sumelabs/cli/releases/latest/download/sume.tgz` where these examples say `sume`.
 
-- Key: `SUME_API_KEY`, read from the environment or from `./.env`. A person makes it at https://www.sume.com/dashboard/api-keys. Never print it, and never paste it into a chat or a command line.
+- Key: `SUME_API_KEY`, read from the environment or from `./.env`. A person makes it at https://www.sume.com/dashboard/api-keys, or signs this machine in once with `sume login --device` (a code to approve). Never print a key, and never paste it into a chat or a command line.
 - Host: `https://api.sume.com`, the default; nothing to set. Never `https://api.open.sume.com`: that is Sume Open's API, and sume.com keys fail there.
 - Check both: `sume doctor`.
 

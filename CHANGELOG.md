@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `sume login`: the same Sume sign-in as the hosted MCP. A browser opens (OAuth with PKCE on a loopback port), or `--device` prints a code to approve on any device, which is also the default with no terminal. The sign-in refreshes on its own, one refresh at a time across parallel commands, and retries a request once when the API refuses an expired token. `--with-key` (stdin) or `--api-key` saves an API key instead.
+- `sume logout` revokes the sign-in on the server, then forgets it and any saved key; `auth logout` does the same and keeps its `removed` field. `sume auth token` prints a current access token.
+- `sume workspaces list` and `sume workspaces select <WORKSPACE>` (by id or exact name): a sign-in can switch the workspace runs bill. An API key cannot, and says how to sign in instead.
+- `auth status` and `doctor` report a sign-in (`signed_in`, `session`, `key_source: "session"` in JSON).
+
 - `sume balance`, `sume usage list` (also `usage get`) and `sume account get` (also `sume me`): what the workspace can spend, what recent jobs cost, and which workspace and key the CLI uses, from `GET /v1/balance`, `/v1/usage`, `/v1/me` and `/v1/workspaces`.
 - `auth status` shows the workspace and its balance (`workspace` and `balance` in `--json`). `doctor` names the workspace and adds a `Balance` check that warns when there is nothing to spend.
 - `run` and `upload` say when the key comes from `./.env`, and which workspace it bills.

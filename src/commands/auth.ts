@@ -1,12 +1,11 @@
-import { SumeClient } from "../api/client.ts";
-import { ApiError } from "../api/errors.ts";
 import type { Balance, Workspace } from "../api/types.ts";
-import type { Context } from "../context.ts";
 import type { CommandSpec } from "../lib/args.ts";
-import { KEYS_URL, maskKey, otherHostHint, readConfig, removeConfig, writeConfig } from "../lib/config.ts";
-import { CliError, ExitCode, UsageError } from "../lib/errors.ts";
+import { KEYS_URL, maskKey, readConfig, writeConfig } from "../lib/config.ts";
+import { ExitCode, UsageError } from "../lib/errors.ts";
 import { readAllStdin, readSecret } from "../lib/prompt.ts";
 import { balanceLine, balanceSummary, currentWorkspace, workspaceLabel } from "./account.ts";
+import { checkKey, checkSession } from "./key-check.ts";
+import { logoutCommand, token } from "./login.ts";
 
 const login: CommandSpec = {
   name: "login",
@@ -55,9 +54,13 @@ const status: CommandSpec = {
   summary: "Show which key and API the CLI uses, and check the key works",
   run: async (_parsed, ctx) => {
     const { ui } = ctx;
-    const { apiKey, apiKeySource, baseUrlSource, configPath } = ctx.settings;
+    const { apiKey, apiKeySource, baseUrlSource, configPath, session, sessionElsewhere } = ctx.settings;
     const sources = { flag: "--api-key", env: "SUME_API_KEY", dotenv: "SUME_API_KEY in ./.env", config: configPath };
-    const verdict = apiKey ? await checkKey(ctx, apiKey) : undefined;
+    const verdict = apiKey ? await checkKey(ctx, apiKey) : session ? await checkSession(ctx) : undefined;
+    const elsewhere =
+      !apiKey && !session && sessionElsewhere
+        ? `This computer is signed in for ${sessionElsewhere}, not ${ctx.client().baseUrl}. Sign in here with: sume login --base-url ${ctx.client().baseUrl}`
+        : undefined;
     let workspace: Workspace | undefined;
     let funds: Balance | undefined;
     if (verdict?.ok) {
@@ -75,8 +78,18 @@ const status: CommandSpec = {
         api_url: ctx.client().baseUrl,
         api_url_source: baseUrlSource,
         key: apiKey ? maskKey(apiKey) : null,
-        key_source: apiKeySource ?? null,
+        key_source: apiKeySource ?? (session ? "session" : null),
         valid: verdict?.ok ?? false,
+        signed_in: Boolean(session),
+        session: session
+          ? {
+              issuer: session.issuer,
+              resource: session.resource,
+              expires_at: session.expires_at,
+              scope: session.scope ?? null,
+            }
+          : null,
+        ...(elsewhere ? { hint: elsewhere } : {}),
         ...(verdict && !verdict.ok
           ? { error: { code: verdict.error.code, message: verdict.error.message, hint: verdict.error.hint ?? null } }
           : {}),
@@ -92,12 +105,18 @@ const status: CommandSpec = {
       ui.out(
         `${c.dim("API".padEnd(10))}${ctx.client().baseUrl} ${c.dim(baseUrlSource === "default" ? "(default)" : `(from ${baseUrlSource})`)}`,
       );
-      if (!apiKey) {
+      if (!apiKey && !session) {
         ui.out(`${c.dim("Key".padEnd(10))}${c.yellow("none")}`);
-        ui.info(c.dim(`\nCreate a key at ${KEYS_URL}, then run \`sume auth login\` or export SUME_API_KEY.`));
+        ui.info(
+          c.dim(
+            `\n${elsewhere ?? `Sign in with \`sume login\`, or make a key at ${KEYS_URL} and export SUME_API_KEY.`}`,
+          ),
+        );
       } else {
         ui.out(
-          `${c.dim("Key".padEnd(10))}${maskKey(apiKey)} ${c.dim(`(from ${apiKeySource ? sources[apiKeySource] : "?"})`)}`,
+          apiKey
+            ? `${c.dim("Key".padEnd(10))}${maskKey(apiKey)} ${c.dim(`(from ${apiKeySource ? sources[apiKeySource] : "?"})`)}`
+            : `${c.dim("Key".padEnd(10))}Sume sign-in ${c.dim(`(${new URL(session?.issuer ?? "").host}; refreshes on its own)`)}`,
         );
         ui.out(
           `${c.dim("Check".padEnd(10))}${verdict?.ok ? c.green("ok") : c.red(verdict?.error.message ?? "failed")}`,
@@ -111,64 +130,21 @@ const status: CommandSpec = {
         if (verdict && !verdict.ok && verdict.error.hint) ui.info(c.dim(`\n${verdict.error.hint}`));
       }
     }
-    if (!apiKey) return ExitCode.Auth;
+    if (!apiKey && !session) return ExitCode.Auth;
     return verdict?.ok ? ExitCode.Ok : (verdict?.error.exitCode ?? ExitCode.Error);
   },
 };
 
 const logout: CommandSpec = {
   name: "logout",
-  summary: "Forget the saved key",
-  description: `Removes the key from this computer. It does not revoke it: do that at ${KEYS_URL}.`,
-  run: async (_parsed, ctx) => {
-    const { ui } = ctx;
-    const stored = readConfig(ctx.settings.configPath);
-    const had = Boolean(stored.api_key);
-    if (stored.base_url) writeConfig(ctx.settings.configPath, { base_url: stored.base_url });
-    else removeConfig(ctx.settings.configPath);
-    if (ctx.json) ui.json({ removed: had });
-    else ui.success(had ? "Removed the saved key." : "No saved key.");
-    if (!ctx.json && ctx.env.SUME_API_KEY) ui.warn("SUME_API_KEY is still set in this shell.");
-    return ExitCode.Ok;
-  },
+  summary: "Forget the saved key, and revoke a Sume sign-in",
+  description: `Removes the saved key from this computer (revoke the key itself at ${KEYS_URL}). A Sume sign-in is revoked on the server, then removed. Same as \`sume logout\`.`,
+  run: async (_parsed, ctx) => logoutCommand(ctx),
 };
 
 export const auth: CommandSpec = {
   name: "auth",
   group: "Setup",
-  summary: "Save, check or forget your API key",
-  commands: [login, status, logout],
+  summary: "Save, check or forget your API key or Sume sign-in",
+  commands: [login, status, logout, token],
 };
-
-/** A cheap authenticated read: one job from the list. Spends nothing. */
-async function checkKey(ctx: Context, key: string): Promise<{ ok: true } | { ok: false; error: CliError }> {
-  const client = new SumeClient({
-    baseUrl: ctx.settings.baseUrl,
-    apiKey: key,
-    userAgent: ctx.userAgent,
-    maxRetries: 1,
-  });
-  try {
-    await client.listJobs({ limit: 1 }, ctx.signal);
-    return { ok: true };
-  } catch (error) {
-    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-      return {
-        ok: false,
-        error: new CliError(
-          error.apiCode === "unauthorized" ? "The API does not accept this key (wrong or revoked)." : error.message,
-          {
-            exitCode: ExitCode.Auth,
-            code: error.apiCode,
-            hint:
-              error.apiCode === "unauthorized"
-                ? `${otherHostHint(client.baseUrl)} Or create a new key at ${KEYS_URL}.`
-                : error.hint,
-          },
-        ),
-      };
-    }
-    if (error instanceof CliError) return { ok: false, error };
-    throw error;
-  }
-}
