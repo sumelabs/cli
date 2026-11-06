@@ -83,7 +83,7 @@ async function accountGet(ctx: Context): Promise<number> {
   row("Workspace", `${workspace ? workspaceLabel(workspace) : "—"} ${c.dim(account.workspace_id)}`);
   if (account.api_key) {
     const name = account.api_key.name ? `${account.api_key.name} ` : "";
-    row("Key", `${name}${c.dim(maskKey(account.api_key.prefix))}`);
+    row("Key", `${name}${c.dim(`${account.api_key.prefix}…`)}`);
     row("Scopes", account.api_key.scopes.join(", ") || "—");
   }
   row("Signed in", account.auth_source === "mcp_oauth" ? "with Sume (sume login)" : "with an API key");

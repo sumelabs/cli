@@ -45,6 +45,7 @@ describe("account context", () => {
     expect(human.code).toBe(0);
     expect(human.stdout).toContain("Personal (personal)");
     expect(human.stdout).toContain("with an API key");
+    expect(human.stdout).toContain(`${TEST_KEY.slice(0, 18)}…`);
     expect(human.stdout).not.toContain(TEST_KEY);
 
     const json = await cli(["account", "get", "--json"]);
