@@ -589,6 +589,7 @@ describe("fal-level features", () => {
       "API",
       "Models",
       "Key",
+      "Balance",
       "Media",
     ]);
     const api = ok.json<{ checks: { name: string; detail: string }[] }>().checks.find((c) => c.name === "API");
@@ -730,7 +731,8 @@ describe("less setup for agents", () => {
 describe("generated agent files", () => {
   it("AGENTS.md carries the page `sume agent` prints, between its markers", () => {
     const text = readFileSync(join(import.meta.dirname, "..", "AGENTS.md"), "utf8");
-    const block = text.slice(text.indexOf("<!-- BEGIN sume -->\n") + 24, text.indexOf("\n<!-- END sume -->"));
+    const begin = "<!-- BEGIN sume -->\n";
+    const block = text.slice(text.indexOf(begin) + begin.length, text.indexOf("\n<!-- END sume -->"));
     expect(block).toBe(agentMarkdown());
   });
 

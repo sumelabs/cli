@@ -1,10 +1,12 @@
 import { SumeClient } from "../api/client.ts";
 import { ApiError } from "../api/errors.ts";
+import type { Balance, Workspace } from "../api/types.ts";
 import type { Context } from "../context.ts";
 import type { CommandSpec } from "../lib/args.ts";
 import { KEYS_URL, maskKey, otherHostHint, readConfig, removeConfig, writeConfig } from "../lib/config.ts";
 import { CliError, ExitCode, UsageError } from "../lib/errors.ts";
 import { readAllStdin, readSecret } from "../lib/prompt.ts";
+import { balanceLine, balanceSummary, currentWorkspace, workspaceLabel } from "./account.ts";
 
 const login: CommandSpec = {
   name: "login",
@@ -56,6 +58,17 @@ const status: CommandSpec = {
     const { apiKey, apiKeySource, baseUrlSource, configPath } = ctx.settings;
     const sources = { flag: "--api-key", env: "SUME_API_KEY", dotenv: "SUME_API_KEY in ./.env", config: configPath };
     const verdict = apiKey ? await checkKey(ctx, apiKey) : undefined;
+    let workspace: Workspace | undefined;
+    let funds: Balance | undefined;
+    if (verdict?.ok) {
+      [workspace, funds] = await Promise.all([
+        currentWorkspace(ctx),
+        ctx
+          .client()
+          .getBalance(ctx.signal)
+          .catch(() => undefined),
+      ]);
+    }
 
     if (ctx.json) {
       ui.json({
@@ -67,20 +80,34 @@ const status: CommandSpec = {
         ...(verdict && !verdict.ok
           ? { error: { code: verdict.error.code, message: verdict.error.message, hint: verdict.error.hint ?? null } }
           : {}),
+        ...(verdict?.ok
+          ? {
+              workspace: workspace ? { id: workspace.id, name: workspace.name, kind: workspace.kind } : null,
+              balance: funds ? balanceSummary(funds) : null,
+            }
+          : {}),
       });
     } else {
       const { c } = ui;
       ui.out(
-        `${c.dim("API     ")} ${ctx.client().baseUrl} ${c.dim(baseUrlSource === "default" ? "(default)" : `(from ${baseUrlSource})`)}`,
+        `${c.dim("API".padEnd(10))}${ctx.client().baseUrl} ${c.dim(baseUrlSource === "default" ? "(default)" : `(from ${baseUrlSource})`)}`,
       );
       if (!apiKey) {
-        ui.out(`${c.dim("Key     ")} ${c.yellow("none")}`);
+        ui.out(`${c.dim("Key".padEnd(10))}${c.yellow("none")}`);
         ui.info(c.dim(`\nCreate a key at ${KEYS_URL}, then run \`sume auth login\` or export SUME_API_KEY.`));
       } else {
         ui.out(
-          `${c.dim("Key     ")} ${maskKey(apiKey)} ${c.dim(`(from ${apiKeySource ? sources[apiKeySource] : "?"})`)}`,
+          `${c.dim("Key".padEnd(10))}${maskKey(apiKey)} ${c.dim(`(from ${apiKeySource ? sources[apiKeySource] : "?"})`)}`,
         );
-        ui.out(`${c.dim("Check   ")} ${verdict?.ok ? c.green("ok") : c.red(verdict?.error.message ?? "failed")}`);
+        ui.out(
+          `${c.dim("Check".padEnd(10))}${verdict?.ok ? c.green("ok") : c.red(verdict?.error.message ?? "failed")}`,
+        );
+        if (verdict?.ok) {
+          ui.out(
+            `${c.dim("Workspace".padEnd(10))}${workspace ? `${workspaceLabel(workspace)} ${c.dim(workspace.id)}` : "—"}`,
+          );
+          if (funds) ui.out(`${c.dim("Balance".padEnd(10))}${balanceLine(funds)}`);
+        }
         if (verdict && !verdict.ok && verdict.error.hint) ui.info(c.dim(`\n${verdict.error.hint}`));
       }
     }

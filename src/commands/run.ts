@@ -12,6 +12,7 @@ import { needsUploadToPrice, priceNeedsUpload, withPlaceholders } from "../lib/p
 import { unknownFields } from "../lib/schema.ts";
 import { formatBytes, formatUsd } from "../lib/ui.ts";
 import { checkUploadable, uploadFile } from "../lib/upload.ts";
+import { noteDotenvKey } from "./account.ts";
 import {
   followJob,
   INPUT_FLAGS,
@@ -105,9 +106,14 @@ async function runCommand(parsed: Parsed, ctx: Context): Promise<number> {
   }
   const startedAt = Date.now();
   const client = ctx.client();
+  const keyNote = dryRun ? undefined : noteDotenvKey(ctx);
 
   ui.spin(`Looking up ${modelId}`);
   const model = await resolveModel(ctx, modelId);
+  if (keyNote) {
+    ui.stopSpinner();
+    await keyNote;
+  }
   const body = await buildBody(model, { ...flags, prompt }, undefined, ctx.cwd);
   checkMediaUrls(body);
   const localFiles = localMediaPaths(body);

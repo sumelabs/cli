@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sume balance`, `sume usage list` (also `usage get`) and `sume account get` (also `sume me`): what the workspace can spend, what recent jobs cost, and which workspace and key the CLI uses, from `GET /v1/balance`, `/v1/usage`, `/v1/me` and `/v1/workspaces`.
+- `auth status` shows the workspace and its balance (`workspace` and `balance` in `--json`). `doctor` names the workspace and adds a `Balance` check that warns when there is nothing to spend.
+- `run` and `upload` say when the key comes from `./.env`, and which workspace it bills.
+
 ### Fixed
 
 - A run whose price depends on a local file (lip-sync speech, a reference clip) is priced from the uploaded file: `run` uploads it first, then checks `--max-usd`, instead of refusing with "the price cannot be checked". `estimate` and `run --dry-run` name the file and the `sume upload` command, instead of the API's "host name does not exist" for a placeholder the CLI made up. Exit codes and error codes are unchanged.

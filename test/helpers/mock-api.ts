@@ -123,6 +123,7 @@ export class MockApi {
   refuseAtSubmit = false;
   readsUntilDone = 2;
   balanceUsd = 10;
+  workspace = { id: "user_test", name: "Personal", kind: "personal" as "personal" | "team" };
   url = "";
   #server: Server | undefined;
 
@@ -312,6 +313,75 @@ export class MockApi {
           idempotency_hit: Boolean(existing),
         },
       });
+    }
+
+    if (req.method === "GET" && path === "/v1/me") {
+      return send(200, {
+        data: {
+          account: {
+            workspace_id: this.workspace.id,
+            owner_user_id: "user_test",
+            api_key: { id: "key_test", name: "test key", prefix: TEST_KEY.slice(0, 18), scopes: ["account:read"] },
+            auth_source: "ledger",
+          },
+        },
+      });
+    }
+    if (req.method === "GET" && path === "/v1/balance") {
+      const credits = Math.floor(this.balanceUsd * 62.5);
+      return send(200, {
+        data: {
+          balance: {
+            available_credits: credits,
+            available_usd: this.balanceUsd.toFixed(2),
+            state: credits > 0 ? "funded" : "empty",
+            updated_at: new Date().toISOString(),
+            expiration: {
+              next_expires_at: null,
+              next_expiring_credits: 0,
+              expiring_soon_days: 30,
+              expiring_soon_credits: 0,
+            },
+          },
+        },
+      });
+    }
+    if (req.method === "GET" && path === "/v1/usage") {
+      const limit = Number(url.searchParams.get("limit") ?? 20);
+      const job = url.searchParams.get("job_id");
+      const rows = [...this.jobs.values()]
+        .reverse()
+        .filter((j) => !job || j.id === job)
+        .map((j, i) => ({
+          id: `usage_${i}`,
+          request_id: j.id,
+          job_id: j.id,
+          operation_type: j.type,
+          status: j.status === "failed" ? "refunded" : "captured",
+          credits: 1,
+          usd: "0.0077",
+          auth_source: "api_key",
+          created_at: j.created_at,
+          updated_at: j.created_at,
+          captured_at: j.created_at,
+          refunded_at: null,
+        }));
+      return send(200, { data: { usage: rows.slice(0, limit), limit } });
+    }
+    if (req.method === "GET" && path === "/v1/workspaces") {
+      return send(200, {
+        object: "list",
+        data: [{ object: "workspace", ...this.workspace, is_selected: true }],
+        selected_workspace_id: this.workspace.id,
+        switchable: false,
+      });
+    }
+    if (req.method === "POST" && path === "/v1/workspaces/select") {
+      return error(
+        409,
+        "workspace_fixed",
+        "This credential belongs to one workspace. Sign in with Sume (an MCP connection or sume login) to switch workspaces.",
+      );
     }
 
     const jobMatch = /^\/v1\/jobs\/([^/]+)(?:\/(status|result|cancel|events))?$/u.exec(path);

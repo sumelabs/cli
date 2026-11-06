@@ -1,8 +1,7 @@
-import { KEYS_URL, otherHostHint } from "../lib/config.ts";
+import { BILLING_URL, KEYS_URL, otherHostHint } from "../lib/config.ts";
 import { CliError, ExitCode } from "../lib/errors.ts";
 import type { ApiErrorBody } from "./types.ts";
 
-const BILLING_URL = "https://www.sume.com/dashboard/billing";
 const STATUS_URL = "https://status.sume.com";
 
 /** A non-2xx answer from the API, with its `error` envelope. */
