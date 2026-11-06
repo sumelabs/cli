@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `--version` prints the version at any depth (`sume run --version`), as `--help` does. `--help` wins when both are given.
+- The command names sume.com/docs/cli uses work: `sume catalog list` runs `sume models` (with a note), `sume models list` lists every model instead of filtering by "list", and `sume jobs result <job>` is `sume jobs get <job>`.
+
 ### Added
 
 - `sume login`: the same Sume sign-in as the hosted MCP. A browser opens (OAuth with PKCE on a loopback port), or `--device` prints a code to approve on any device, which is also the default with no terminal. The sign-in refreshes on its own, one refresh at a time across parallel commands, and retries a request once when the API refuses an expired token. `--with-key` (stdin) or `--api-key` saves an API key instead.

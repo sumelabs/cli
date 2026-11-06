@@ -44,13 +44,14 @@ export const models: CommandSpec = {
 
 async function modelsCommand(parsed: Parsed, ctx: Context): Promise<number> {
   const { ui } = ctx;
-  const query = parsed.args[0]?.trim();
+  const asked = parsed.args[0]?.trim();
   const kind = parsed.flags.kind as string | undefined;
   const company = (parsed.flags.company as string | undefined)?.toLowerCase();
 
   ui.spin("Loading models");
   const all = await ctx.client().listModels(ctx.signal);
   ui.stopSpinner();
+  const query = asked === "list" && !all.some((m) => m.id === "list") ? undefined : asked;
 
   const exact = query ? all.find((m) => m.id === query || m.slug === query) : undefined;
   if (exact) {
@@ -295,3 +296,21 @@ function example(m: CatalogModel): string {
     }
   }
 }
+
+export const catalog: CommandSpec = {
+  name: "catalog",
+  hidden: true,
+  group: "Models and jobs",
+  summary: "The older name for `sume models`",
+  commands: [
+    {
+      name: "list",
+      summary: "List the models and their prices (same as `sume models`)",
+      flags: models.flags ?? [],
+      run: async (parsed, ctx) => {
+        if (!ctx.json) ctx.ui.warn("`sume catalog list` is the older name; it runs `sume models`.");
+        return modelsCommand({ ...parsed, args: [] }, ctx);
+      },
+    },
+  ],
+};

@@ -74,7 +74,7 @@ const list: CommandSpec = {
 
 const get: CommandSpec = {
   name: "get",
-  aliases: ["show"],
+  aliases: ["show", "result"],
   summary: "Show a job: its input, state, timing, error and files",
   args: jobArg,
   run: async (parsed, ctx) => {
